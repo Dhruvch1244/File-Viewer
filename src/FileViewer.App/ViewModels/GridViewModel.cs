@@ -213,4 +213,12 @@ public sealed class GridViewModel : ObservableObject
         Selection.Clear();
         Rows.Invalidate();
     }
+
+    /// <summary>Deletes one specific record immediately — the per-row trash-can button, independent of checkbox selection/Delete.</summary>
+    public void DeleteRow(long rowIndex)
+    {
+        Session.Overlay.DeleteRow(rowIndex);
+        Selection.SetSelected(rowIndex, false);
+        Rows.Invalidate();
+    }
 }

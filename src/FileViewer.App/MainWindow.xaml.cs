@@ -16,8 +16,8 @@ namespace FileViewer.App;
 
 public partial class MainWindow : Window
 {
-    /// <summary>Number of always-present, non-data columns (select checkbox, view button) prepended to every dynamically-built column set.</summary>
-    private const int FixedColumnCount = 2;
+    /// <summary>Number of always-present, non-data columns (select checkbox, view button, delete button) prepended to every dynamically-built column set.</summary>
+    private const int FixedColumnCount = 3;
 
     private readonly MainViewModel _viewModel = new();
     private string? _activeFilterColumn;
@@ -120,6 +120,13 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Per-row "Delete" button — removes this one record immediately, independent of checkbox selection.</summary>
+    private void OnDeleteRowClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: RowViewModel row } || _viewModel.Grid is not { } grid) return;
+        grid.DeleteRow(row.RowIndex);
+    }
+
     /// <summary>
     /// A single click on a column header opens its value-filter popup; a double-click sorts by it
     /// instead. Intercepting on Preview (mouse-down, before the header's own click/Sorting
@@ -164,6 +171,16 @@ public partial class MainWindow : Window
         {
             Header = string.Empty,
             CellTemplate = (DataTemplate)FindResource("ViewButtonCellTemplate"),
+            CellStyle = (Style)FindResource("CenteredCellStyle"),
+            Width = 64,
+            CanUserResize = false,
+            CanUserSort = false,
+            CanUserReorder = false,
+        });
+        RowsDataGrid.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = string.Empty,
+            CellTemplate = (DataTemplate)FindResource("DeleteButtonCellTemplate"),
             CellStyle = (Style)FindResource("CenteredCellStyle"),
             Width = 64,
             CanUserResize = false,
