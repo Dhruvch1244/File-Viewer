@@ -88,22 +88,21 @@ dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-wi
 
 ### Code signing (avoiding the "Unknown Publisher" warning)
 
-Release builds are signed via [SignPath](https://signpath.io)'s free code-signing program for
-open-source projects, so the downloaded exe isn't flagged by Windows SmartScreen. To enable it on
-a fork or after re-creating the repo:
+Release builds aren't code-signed, so Windows SmartScreen flags the exe as "Unknown Publisher" —
+this is expected for an indie/unsigned build. On the SmartScreen dialog, click **More info** →
+**Run anyway**; that's safe for a build you compiled yourself or downloaded from this repo's own
+Releases page.
 
-1. Sign up at [signpath.io](https://signpath.io), create an organization, and apply for the free
-   open-source plan for this project (this step needs manual approval from SignPath — it isn't
-   something a script can do for you).
-2. In the SignPath dashboard, create a **project** and a **signing policy** for release builds,
-   and generate an **API token** with permission to submit signing requests.
-3. In this repo's Settings → Secrets and variables → Actions, add:
-   - Secrets: `SIGNPATH_API_TOKEN`, `SIGNPATH_ORG_ID`
-   - Variables: `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`
-
-Once those are set, the next tag push signs the exe automatically. Until then, `release.yml` skips
-signing and ships an unsigned build — the workflow doesn't fail either way. Local builds from
-`build-release.ps1` are always unsigned; only CI-produced releases get signed.
+To make the warning go away for good, some options (roughly cheapest/least-effort to most):
+- **Self-signed certificate** — free, removes the "Unknown Publisher" text in favor of your own
+  name, but SmartScreen still warns on any machine that hasn't explicitly trusted your certificate.
+  Really only useful for your own machines.
+- **A CA-issued code signing certificate** (OV or EV, from a provider like DigiCert or SSL.com) —
+  the real fix; costs roughly $70–400+/year. EV certs get instant SmartScreen trust; OV certs build
+  up trust over time as more people download the signed exe.
+- **Distribute via the Microsoft Store** — packaging as MSIX and publishing through the Store
+  (one-time developer account fee) sidesteps SmartScreen entirely, since Store-installed apps are
+  already vetted by Microsoft's submission process.
 
 ## Benchmarks
 
