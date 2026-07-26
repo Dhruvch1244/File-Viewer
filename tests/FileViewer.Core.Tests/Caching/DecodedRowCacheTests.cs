@@ -5,7 +5,7 @@ namespace FileViewer.Core.Tests.Caching;
 public class DecodedRowCacheTests
 {
     private static DecodedRow MakeRow(long rowIndex) =>
-        new(rowIndex, [$"field{rowIndex}"], RowRenderState.Normal);
+        new(rowIndex, [$"field{rowIndex}"]);
 
     [Fact]
     public void TryGet_OnEmptyCache_ReturnsFalse()

@@ -37,16 +37,25 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
     private string? _filterText;
     private long[]? _customOrderOverride;
     private int _pageIndex;
+    private readonly Dictionary<string, HashSet<string>> _columnValueFilters = new();
 
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
-    private long[] EffectiveOrder => _effectiveOrder ??= BuildEffectiveOrder();
+    private long[] EffectiveOrder => _effectiveOrder ??= [.. BuildCandidates(excludingColumn: null)];
 
     public int TotalRowCount => EffectiveOrder.Length;
     public int PageIndex => _pageIndex;
     public int PageCount => Math.Max(1, (int)Math.Ceiling(EffectiveOrder.Length / (double)PageSize));
 
-    private long[] BuildEffectiveOrder()
+    /// <summary>
+    /// Builds the current candidate row list: base/added rows, minus deleted, minus the search
+    /// filter, minus every active per-column value filter except <paramref name="excludingColumn"/>.
+    /// Excluding one column's own filter is what lets its value-picker popup still offer that
+    /// column's full available value set (relative to every OTHER active filter) rather than only
+    /// the values that survive its own current selection — the same "what could I pick instead"
+    /// behavior Excel's column filter menus have.
+    /// </summary>
+    private List<long> BuildCandidates(string? excludingColumn)
     {
         IEnumerable<long> candidates;
         if (_customOrderOverride is not null)
@@ -89,7 +98,13 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
             result = RowFilter.Filter(result, _filterText, session.FileIndex, session.Overlay, session.Cache);
         }
 
-        return [.. result];
+        foreach ((string columnName, HashSet<string> allowedValues) in _columnValueFilters)
+        {
+            if (columnName == excludingColumn) continue;
+            result = RowFilter.FilterByColumnValues(result, columnName, allowedValues, session.FileIndex, session.Overlay, session.Cache);
+        }
+
+        return result;
     }
 
     /// <summary>Recomputes which rows are visible and in what order, resets to the first page, and notifies the grid to re-query everything.</summary>
@@ -127,6 +142,33 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
     public void ClearCustomOrder()
     {
         _customOrderOverride = null;
+        Invalidate();
+    }
+
+    /// <summary>Every row index currently matching the active search/column filters, across every page — the full set "select all" should act on, not just the page currently on screen.</summary>
+    public IReadOnlyList<long> GetAllRowIndices() => EffectiveOrder;
+
+    /// <summary>Every distinct value <paramref name="columnName"/> takes among rows passing every OTHER active filter — the value list an Excel-style filter popup for that column should offer.</summary>
+    public List<string> GetDistinctValuesForColumn(string columnName) =>
+        RowFilter.GetDistinctValues(BuildCandidates(excludingColumn: columnName), columnName, session.FileIndex, session.Overlay, session.Cache);
+
+    /// <summary>The currently-selected value set for a column's filter, or null if no filter is active on it.</summary>
+    public HashSet<string>? GetColumnValueFilter(string columnName) =>
+        _columnValueFilters.TryGetValue(columnName, out HashSet<string>? values) ? values : null;
+
+    public bool HasColumnValueFilter(string columnName) => _columnValueFilters.ContainsKey(columnName);
+
+    /// <summary>Sets (or clears, by passing null) which values of <paramref name="columnName"/> are allowed through.</summary>
+    public void SetColumnValueFilter(string columnName, HashSet<string>? allowedValues)
+    {
+        if (allowedValues is null)
+        {
+            _columnValueFilters.Remove(columnName);
+        }
+        else
+        {
+            _columnValueFilters[columnName] = allowedValues;
+        }
         Invalidate();
     }
 

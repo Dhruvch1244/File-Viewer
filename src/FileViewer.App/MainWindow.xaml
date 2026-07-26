@@ -16,17 +16,35 @@
         <DataTemplate x:Key="SelectAllHeaderTemplate">
             <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
                       Checked="OnSelectAllHeaderChecked" Unchecked="OnSelectAllHeaderUnchecked"
-                      ToolTip="Select/clear all rows on this page" />
+                      ToolTip="Select/clear all rows matching the current filter" />
         </DataTemplate>
 
         <DataTemplate x:Key="SelectCheckBoxCellTemplate">
+            <!--
+                DataGrid's own click-to-select logic also fires when you click this checkbox
+                (they share the same routed mouse event), which was silently collapsing multi-row
+                selection down to whatever row was clicked last — checking several rows and hitting
+                Delete only ever affected the last one. PreviewMouseLeftButtonDown intercepts the
+                click, toggles the box manually, and marks the event handled before DataGrid's own
+                selection logic sees it, so checking multiple rows now actually accumulates.
+            -->
             <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsChecked="{Binding RelativeSource={RelativeSource AncestorType=DataGridRow}, Path=IsSelected, Mode=TwoWay}" />
+                      IsChecked="{Binding RelativeSource={RelativeSource AncestorType=DataGridRow}, Path=IsSelected, Mode=TwoWay}"
+                      PreviewMouseLeftButtonDown="OnRowCheckBoxPreviewMouseDown" />
         </DataTemplate>
 
         <DataTemplate x:Key="ViewButtonCellTemplate">
-            <Button Content="View" Style="{StaticResource ToolbarButtonStyle}" Padding="8,2" FontSize="11"
-                    HorizontalAlignment="Center" VerticalAlignment="Center" Click="OnViewRecordClick" />
+            <!-- Minimal hand-drawn "eye" glyph (no icon font / emoji) — opens the record detail dialog. -->
+            <Button Style="{StaticResource ToolbarButtonStyle}" Padding="2" ToolTip="View record"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" Click="OnViewRecordClick">
+                <Viewbox Width="14" Height="14" Stretch="Uniform">
+                    <Canvas Width="24" Height="24">
+                        <Path Data="M1,12 C1,12 5,4 12,4 C19,4 23,12 23,12 C23,12 19,20 12,20 C5,20 1,12 1,12 Z"
+                              Stroke="{StaticResource TextPrimaryBrush}" StrokeThickness="1.8" Fill="Transparent" />
+                        <Ellipse Canvas.Left="9.25" Canvas.Top="9.25" Width="5.5" Height="5.5" Fill="{StaticResource TextPrimaryBrush}" />
+                    </Canvas>
+                </Viewbox>
+            </Button>
         </DataTemplate>
 
         <!-- The base DataGridCell/DataGridColumnHeader styles left-align their content (correct
@@ -34,11 +52,21 @@
              centered instead, with tighter padding since they're narrow, fixed-width columns. -->
         <Style x:Key="CenteredCellStyle" TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
             <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="Padding" Value="4,4" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Padding" Value="2,2" />
         </Style>
         <Style x:Key="CenteredHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="Padding" Value="4,0" />
+        </Style>
+
+        <!-- Data-column headers (not the fixed checkbox/view columns) get a hint that right-click opens the value filter, since there's no per-header icon for it. -->
+        <Style x:Key="DataColumnHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+            <Setter Property="ToolTip" Value="Click to filter by value. Double-click to sort." />
+        </Style>
+
+        <Style x:Key="FilterValueCheckBoxStyle" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Setter Property="Margin" Value="4,3" />
         </Style>
     </Window.Resources>
     <Grid>
@@ -59,6 +87,19 @@
                                 <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" />
                             </StackPanel>
                         </Border>
+                        <TextBlock Text="{Binding Grid.SelectedRows.Count, StringFormat='{}{0} selected'}" VerticalAlignment="Center"
+                                   Margin="8,0,0,0" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Grid.SelectedRows.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
 
                         <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
 
@@ -138,7 +179,8 @@
                       ItemsSource="{Binding Grid.Rows}"
                       SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
                       SelectionChanged="OnGridSelectionChanged"
-                      Sorting="OnDataGridSorting"
+                      PreviewMouseLeftButtonDown="OnDataGridPreviewMouseLeftButtonDown"
+                      PreviewMouseRightButtonDown="OnDataGridPreviewMouseRightButtonDown"
                       SelectionMode="Extended"
                       AutoGenerateColumns="False"
                       CanUserAddRows="False"
@@ -166,11 +208,47 @@
                     <TextBlock DockPanel.Dock="Top" Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" />
                     <TextBox DockPanel.Dock="Top" Margin="0,0,0,8"
                              Text="{Binding Grid.ColumnSearchText, UpdateSourceTrigger=PropertyChanged}" />
+                    <!-- Act on whatever the search box above currently shows — with no search text that's every column. -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnSelectAllColumnsClick" />
+                        <Button Content="Hide all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnHideAllColumnsClick" />
+                    </StackPanel>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding Grid.Columns}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" Margin="4,4" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Popup>
+
+        <!-- ============================== Column value filter (Excel-style) ========= -->
+        <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True">
+            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="220" MaxHeight="380" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
+                <DockPanel>
+                    <TextBlock x:Name="ColumnFilterTitle" DockPanel.Dock="Top" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
+                    <TextBox x:Name="ColumnFilterSearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="OnColumnFilterSearchChanged" />
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick" />
+                        <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick" />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
+                        <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
+                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="ColumnFilterValuesList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

@@ -369,9 +369,6 @@
             <DataTrigger Binding="{Binding RenderState}" Value="Edited">
                 <Setter Property="Background" Value="{StaticResource PaleYellowBrush}" />
             </DataTrigger>
-            <DataTrigger Binding="{Binding RenderState}" Value="Malformed">
-                <Setter Property="Background" Value="{StaticResource PaleRedBrush}" />
-            </DataTrigger>
             <Trigger Property="IsMouseOver" Value="True">
                 <Setter Property="Background" Value="{StaticResource HoverBackgroundBrush}" />
             </Trigger>

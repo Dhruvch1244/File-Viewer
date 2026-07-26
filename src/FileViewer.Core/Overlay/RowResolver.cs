@@ -17,9 +17,12 @@ namespace FileViewer.Core.Overlay;
 /// 2. Added/Duplicated rows (negative row index) read their template from the overlay — there is
 ///    no backing file content.
 /// 3. Existing rows are decoded from the mapped file (through <see cref="DecodedRowCache"/>, which
-///    only ever caches the row's raw file-decoded fields — never the post-overlay result, since
-///    overlay state can change without the underlying file bytes changing).
+///    caches the row's raw file-decoded fields — never the post-overlay result, since overlay
+///    state can change without the underlying file bytes changing).
 /// 4. Cell edits apply on top, in insertion order — last edit to a given column wins.
+///
+/// A row's actual field count is never checked against the header's declared column count here —
+/// every row is shown exactly as it decodes, with no "this record looks malformed" judgment call.
 /// </summary>
 public static class RowResolver
 {
@@ -33,25 +36,21 @@ public static class RowResolver
         }
 
         IReadOnlyList<string> baseFields;
-        bool malformed;
 
         if (rowIndex < 0)
         {
             baseFields = overlay.AddedRowData.TryGetValue(rowIndex, out string[]? template) ? template : [];
-            malformed = false;
         }
         else if (cache.TryGet(rowIndex, out DecodedRow? cached))
         {
             baseFields = cached.FieldValues;
-            malformed = cached.RenderState == RowRenderState.Malformed;
         }
         else
         {
             ReadOnlySpan<byte> rowBytes = fileIndex.GetRowBytes(rowIndex);
             string[] parsed = DifRowParser.ParseRow(rowBytes, (byte)fileIndex.Header.Delimiter, DifFormatOptions.TextEncoding);
-            malformed = parsed.Length != fileIndex.Header.ColumnNames.Count;
             baseFields = parsed;
-            cache.Set(rowIndex, new DecodedRow(rowIndex, parsed, malformed ? RowRenderState.Malformed : RowRenderState.Normal));
+            cache.Set(rowIndex, new DecodedRow(rowIndex, parsed));
         }
 
         string[] resolvedFields = [.. baseFields]; // defensive copy — never mutate a cached/template array in place
@@ -74,7 +73,6 @@ public static class RowResolver
         {
             RowState.Added => RowRenderState.Added,
             RowState.Duplicated => RowRenderState.Duplicated,
-            _ when malformed => RowRenderState.Malformed,
             _ when hasEdits => RowRenderState.Edited,
             _ => RowRenderState.Normal,
         };

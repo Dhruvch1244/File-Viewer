@@ -8,23 +8,25 @@
     <DockPanel Margin="24">
         <TextBlock DockPanel.Dock="Top" Text="RECORD DETAILS" FontSize="11" FontWeight="SemiBold"
                    Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,16" />
-        <Button DockPanel.Dock="Bottom" Content="Close" Style="{StaticResource PrimaryButtonStyle}"
-                HorizontalAlignment="Right" Width="100" Margin="0,16,0,0" Click="OnCloseClick" />
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Width="90" Margin="0,0,8,0" Click="OnCancelClick" />
+            <Button Content="Save" Style="{StaticResource PrimaryButtonStyle}" Width="90" Click="OnSaveClick" />
+        </StackPanel>
 
         <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <ItemsControl ItemsSource="{Binding Fields}" Margin="16">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Grid Margin="0,0,0,12">
+                            <Grid Margin="0,0,0,10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="160" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="{Binding Column}" FontSize="11" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,0,12,0" />
-                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontFamily="{StaticResource MonoFontFamily}"
-                                           Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="0" Text="{Binding ColumnName}" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                <TextBox Grid.Column="1" Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                         FontFamily="{StaticResource MonoFontFamily}" />
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>

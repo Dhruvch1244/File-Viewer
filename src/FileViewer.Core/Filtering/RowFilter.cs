@@ -42,4 +42,65 @@ public static class RowFilter
         }
         return result;
     }
+
+    /// <summary>
+    /// Returns every distinct value <paramref name="columnName"/> takes across <paramref name="rowIndices"/>
+    /// — an Excel-style "pick from what's actually there" filter menu, so a user never has to
+    /// already know a column's possible values to filter by them. Sorted ordinally; case-sensitive
+    /// (two differently-cased strings are genuinely different values here, matching what a user
+    /// would see displayed).
+    /// </summary>
+    public static List<string> GetDistinctValues(
+        IEnumerable<long> rowIndices,
+        string columnName,
+        FileIndex fileIndex,
+        EditOverlay overlay,
+        DecodedRowCache cache)
+    {
+        int columnIndex = fileIndex.Header.ColumnIndexOf(columnName);
+        if (columnIndex < 0)
+        {
+            return [];
+        }
+
+        var distinct = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (long rowIndex in rowIndices)
+        {
+            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
+            if (resolved is null) continue;
+
+            distinct.Add(columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty);
+        }
+        return [.. distinct];
+    }
+
+    /// <summary>Returns the subset of <paramref name="rowIndices"/> (order preserved) whose value for <paramref name="columnName"/> is one of <paramref name="allowedValues"/>.</summary>
+    public static List<long> FilterByColumnValues(
+        IEnumerable<long> rowIndices,
+        string columnName,
+        IReadOnlySet<string> allowedValues,
+        FileIndex fileIndex,
+        EditOverlay overlay,
+        DecodedRowCache cache)
+    {
+        int columnIndex = fileIndex.Header.ColumnIndexOf(columnName);
+        if (columnIndex < 0)
+        {
+            return [.. rowIndices];
+        }
+
+        var result = new List<long>();
+        foreach (long rowIndex in rowIndices)
+        {
+            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
+            if (resolved is null) continue;
+
+            string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
+            if (allowedValues.Contains(value))
+            {
+                result.Add(rowIndex);
+            }
+        }
+        return result;
+    }
 }

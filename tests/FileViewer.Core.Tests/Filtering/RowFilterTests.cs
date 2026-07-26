@@ -70,4 +70,72 @@ public class RowFilterTests
 
         Assert.Empty(result);
     }
+
+    [Fact]
+    public async Task GetDistinctValues_ReturnsSortedUniqueValuesAcrossRows()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        // _ERR is "0" for all three rows in this fixture — should collapse to a single value.
+        List<string> errValues = RowFilter.GetDistinctValues([0, 1, 2], "_ERR", index, overlay, cache);
+        Assert.Equal(["0"], errValues);
+
+        List<string> priceValues = RowFilter.GetDistinctValues([0, 1, 2], "PRICE", index, overlay, cache);
+        Assert.Equal(["100.50", "101.25", "99.75"], priceValues); // ordinal sort, not numeric
+    }
+
+    [Fact]
+    public async Task GetDistinctValues_ReflectsEditedValues()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        overlay.EditCell(0, "PRICE", "EDITED_VALUE");
+
+        List<string> values = RowFilter.GetDistinctValues([0, 1, 2], "PRICE", index, overlay, cache);
+
+        Assert.Contains("EDITED_VALUE", values);
+        Assert.DoesNotContain("100.50", values); // row 0's original value no longer present
+    }
+
+    [Fact]
+    public async Task GetDistinctValues_UnknownColumn_ReturnsEmpty()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<string> values = RowFilter.GetDistinctValues([0, 1, 2], "NO_SUCH_COLUMN", index, overlay, cache);
+
+        Assert.Empty(values);
+    }
+
+    [Fact]
+    public async Task FilterByColumnValues_KeepsOnlyMatchingRows()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<long> result = RowFilter.FilterByColumnValues(
+            [0, 1, 2], "PRICE", new HashSet<string> { "100.50", "99.75" }, index, overlay, cache);
+
+        Assert.Equal([0L, 2L], result);
+    }
+
+    [Fact]
+    public async Task FilterByColumnValues_SkipsDeletedRows()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        overlay.DeleteRow(0);
+
+        List<long> result = RowFilter.FilterByColumnValues(
+            [0, 1, 2], "PRICE", new HashSet<string> { "100.50", "99.75" }, index, overlay, cache);
+
+        Assert.Equal([2L], result); // row 0 matched the value but is deleted
+    }
 }

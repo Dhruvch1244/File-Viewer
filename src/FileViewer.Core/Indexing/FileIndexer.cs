@@ -94,18 +94,9 @@ public static class FileIndexer
 
             int idColumnIndex = header.ColumnIndexOf("_ID");
 
-            (UnmanagedArray<RowIndexEntry> rowIndex, UnmanagedArray<SortKey> sortKeys, List<DifDiagnostic> rowDiagnostics) = ScanDataRegion(
-                pointer, dataStartOffset, dataEndOffsetExclusive, (byte)delimiter, columnNames.Count, idColumnIndex,
+            (UnmanagedArray<RowIndexEntry> rowIndex, UnmanagedArray<SortKey> sortKeys) = ScanDataRegion(
+                pointer, dataStartOffset, dataEndOffsetExclusive, (byte)delimiter, idColumnIndex,
                 fileLength, progress, cancellationToken);
-
-            diagnostics.AddRange(rowDiagnostics);
-
-            if (declaredDataRecords is int declared && declared != checked((int)rowIndex.Count))
-            {
-                diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Warning,
-                    $"Trailer declares {DifFormatOptions.DataRecordsKey}={declared} but {rowIndex.Count} row(s) were actually indexed.",
-                    dataEndOffsetExclusive));
-            }
 
             var result = new FileIndex(path, fileLength, mappedFile, accessor, pointer, header, rowIndex, sortKeys, diagnostics);
             ownershipTransferred = true;
@@ -125,12 +116,11 @@ public static class FileIndexer
         }
     }
 
-    private static unsafe (UnmanagedArray<RowIndexEntry> RowIndex, UnmanagedArray<SortKey> SortKeys, List<DifDiagnostic> Diagnostics) ScanDataRegion(
+    private static unsafe (UnmanagedArray<RowIndexEntry> RowIndex, UnmanagedArray<SortKey> SortKeys) ScanDataRegion(
         byte* filePointer,
         long dataStartOffset,
         long dataEndOffsetExclusive,
         byte delimiter,
-        int expectedColumnCount,
         int idColumnIndex,
         long totalFileLength,
         IProgress<IndexingProgress>? progress,
@@ -145,7 +135,6 @@ public static class FileIndexer
 
         var chunkRowIndexes = new UnmanagedArray<RowIndexEntry>[boundaries.Length - 1];
         var chunkSortKeys = new UnmanagedArray<SortKey>[boundaries.Length - 1];
-        var chunkDiagnostics = new List<DifDiagnostic>[boundaries.Length - 1];
 
         var accumulator = new ProgressAccumulator(totalFileLength, progress);
 
@@ -157,14 +146,13 @@ public static class FileIndexer
             {
                 var localRowIndex = new UnmanagedArray<RowIndexEntry>();
                 var localSortKeys = new UnmanagedArray<SortKey>();
-                var localDiagnostics = ScanChunk(
+                ScanChunk(
                     filePointer, boundaries[chunkIndex], boundaries[chunkIndex + 1],
-                    delimiter, expectedColumnCount, idColumnIndex,
+                    delimiter, idColumnIndex,
                     localRowIndex, localSortKeys, accumulator, cancellationToken);
 
                 chunkRowIndexes[chunkIndex] = localRowIndex;
                 chunkSortKeys[chunkIndex] = localSortKeys;
-                chunkDiagnostics[chunkIndex] = localDiagnostics;
             }, cancellationToken);
         }
 
@@ -185,7 +173,6 @@ public static class FileIndexer
 
         var mergedRowIndex = new UnmanagedArray<RowIndexEntry>(mergedInitialCapacity);
         var mergedSortKeys = new UnmanagedArray<SortKey>(mergedInitialCapacity);
-        var mergedDiagnostics = new List<DifDiagnostic>();
 
         // Each chunk numbers its SortKey.RowIndex values locally, starting at 0 (it has no way to
         // know its global starting row position until every chunk has finished — row counts per
@@ -210,13 +197,11 @@ public static class FileIndexer
             }
             globalRowIndex += (long)chunkRowIndexes[i].Count;
 
-            mergedDiagnostics.AddRange(chunkDiagnostics[i]);
-
             chunkRowIndexes[i].Dispose();
             chunkSortKeys[i].Dispose();
         }
 
-        return (mergedRowIndex, mergedSortKeys, mergedDiagnostics);
+        return (mergedRowIndex, mergedSortKeys);
     }
 
     /// <summary>
@@ -266,21 +251,26 @@ public static class FileIndexer
         return boundaries;
     }
 
-    private static unsafe List<DifDiagnostic> ScanChunk(
+    /// <summary>
+    /// Indexes every row in [chunkStart, chunkEnd) — offset/length plus sort key. Deliberately does
+    /// not check each row's field count against the header's declared column count: a
+    /// content-shape mismatch isn't a reason to flag or refuse a row, only to fail file-open
+    /// entirely (missing structural markers) is handled by DifHeaderParser. Every row is indexed
+    /// and displayed as-is.
+    /// </summary>
+    private static unsafe void ScanChunk(
         byte* filePointer,
         long chunkStart,
         long chunkEnd,
         byte delimiter,
-        int expectedColumnCount,
         int idColumnIndex,
         UnmanagedArray<RowIndexEntry> outRowIndex,
         UnmanagedArray<SortKey> outSortKeys,
         ProgressAccumulator accumulator,
         CancellationToken cancellationToken)
     {
-        var diagnostics = new List<DifDiagnostic>();
         int chunkLength = checked((int)(chunkEnd - chunkStart));
-        if (chunkLength <= 0) return diagnostics;
+        if (chunkLength <= 0) return;
 
         var chunkSpan = new ReadOnlySpan<byte>(filePointer + chunkStart, chunkLength);
 
@@ -310,14 +300,6 @@ public static class FileIndexer
             // finished). ScanDataRegion's merge step corrects it.
             outSortKeys.Add(SortKeyBuilder.Build(checked((long)outRowIndex.Count - 1), trimmed, delimiter, idColumnIndex));
 
-            int actualFieldCount = DifRowParser.CountFields(trimmed, delimiter);
-            if (actualFieldCount != expectedColumnCount)
-            {
-                diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Warning,
-                    $"Row at offset {absoluteOffset} has {actualFieldCount} field(s), expected {expectedColumnCount}; row is still indexed.",
-                    absoluteOffset));
-            }
-
             rowsSinceLastReport++;
             if (rowsSinceLastReport >= ProgressReportRowInterval)
             {
@@ -332,8 +314,6 @@ public static class FileIndexer
         {
             accumulator.Report(rowsSinceLastReport, pos - posAtLastReport);
         }
-
-        return diagnostics;
     }
 
     private sealed class ProgressAccumulator(long totalBytes, IProgress<IndexingProgress>? progress)

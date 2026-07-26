@@ -81,26 +81,30 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public async Task BadColumnCount_RowsAreStillIndexedWithPerRowDiagnostics()
+    public async Task BadColumnCount_RowsAreStillIndexedWithoutAnyDiagnostics()
     {
+        // Explicit product decision: a row's field count is never validated against the header's
+        // declared column count. Rows with too few/too many fields are indexed and shown exactly
+        // like any other row, with no warning generated.
         using FileIndex index = await FileIndexer.IndexAsync(FixturePath("bad_column_count.dif"));
 
         Assert.True(index.Header.IsValid);
         Assert.Equal((nuint)3, index.RowIndex.Count);
-
-        var warnings = index.Diagnostics.Where(d => d.Severity == DifDiagnosticSeverity.Warning && d.Message.Contains("field(s)")).ToList();
-        Assert.Equal(2, warnings.Count); // rows with 2 and 4 fields against a 3-column header; the 3-field row is fine
+        Assert.Empty(index.Diagnostics);
     }
 
     [Fact]
-    public async Task DataRecordsMismatch_ProducesWarningNotError()
+    public async Task DataRecordsMismatch_IndexesActualRowCountWithoutAnyDiagnostics()
     {
+        // Same principle for the trailer's DATARECORDS count: it's parsed into
+        // DifFileHeader.DeclaredDataRecords for informational purposes, but a mismatch against the
+        // actual indexed row count is never flagged.
         using FileIndex index = await FileIndexer.IndexAsync(FixturePath("datarecords_mismatch.dif"));
 
         Assert.True(index.Header.IsValid);
         Assert.Equal((nuint)3, index.RowIndex.Count);
-        Assert.Contains(index.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Warning && d.Message.Contains("DATARECORDS"));
-        Assert.DoesNotContain(index.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(5, index.Header.DeclaredDataRecords);
+        Assert.Empty(index.Diagnostics);
     }
 
     [Fact]
@@ -115,19 +119,17 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public async Task RealSampleFile_IndexesAllFiftyRowsWithConsistentColumnMismatchDiagnostics()
+    public async Task RealSampleFile_IndexesAllFiftyRowsDespiteColumnCountMismatch()
     {
+        // Every row in this real sample actually has 33 fields against a 30-column header (see
+        // DifHeaderParserTests) — confirms that mismatch has zero effect on indexing: no
+        // diagnostics, every row present, content and order intact.
         using FileIndex index = await FileIndexer.IndexAsync(FixturePath("FixedIncomeAsia.dif"));
 
         Assert.True(index.Header.IsValid);
         Assert.Equal((nuint)50, index.RowIndex.Count);
         Assert.Equal((nuint)50, index.SortKeys.Count);
-        Assert.DoesNotContain(index.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
-
-        // Every row has 33 fields against the 30-column header (see DifHeaderParserTests) — the
-        // indexer should have recorded exactly one mismatch warning per data row.
-        int mismatchWarnings = index.Diagnostics.Count(d => d.Severity == DifDiagnosticSeverity.Warning && d.Message.Contains("field(s)"));
-        Assert.Equal(50, mismatchWarnings);
+        Assert.Empty(index.Diagnostics);
 
         // Spot-check row order and content is preserved.
         string[] firstRow = DifRowParser.ParseRow(index.GetRowBytes(0), (byte)index.Header.Delimiter, DifFormatOptions.TextEncoding);

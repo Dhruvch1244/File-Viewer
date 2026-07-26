@@ -192,6 +192,14 @@ public sealed class GridViewModel : ObservableObject
         Rows.Invalidate();
     }
 
+    /// <summary>Selects every row matching the current search/column filters, across every page — not just the page currently rendered by the grid.</summary>
+    public void SelectAllRows()
+    {
+        SelectedRows = [.. Rows.GetAllRowIndices().Select(index => new RowViewModel(Session, index))];
+    }
+
+    public void ClearAllRowSelection() => SelectedRows = [];
+
     private void DeleteSelectedRows()
     {
         Session.Overlay.BulkDelete(SelectedRows.Select(r => r.RowIndex).ToArray());

@@ -141,20 +141,26 @@ public class RowResolverTests
     }
 
     [Fact]
-    public async Task Resolve_MalformedRow_ReportsMalformedEvenWhenAlsoEdited()
+    public async Task Resolve_RowWithFieldCountMismatch_ResolvesNormallyWithNoSpecialState()
     {
+        // A row's actual field count is never checked against the header's declared column count —
+        // it's shown exactly as it decodes, no "malformed" judgment call (per explicit product
+        // decision: don't validate records, just display them).
         using FileIndex index = await FileIndexer.IndexAsync(FixturePath("bad_column_count.dif"));
         var overlay = new EditOverlay();
         var cache = new DecodedRowCache();
 
         // Row 1 ("SEC002 HK Equity|0") has only 2 fields against the 3-column header.
+        ResolvedRow? unedited = RowResolver.Resolve(1, index, overlay, cache);
+        Assert.NotNull(unedited);
+        Assert.Equal(RowRenderState.Normal, unedited.RenderState);
+
         overlay.EditCell(1, "_ID", "EDITED_ANYWAY");
+        ResolvedRow? edited = RowResolver.Resolve(1, index, overlay, cache);
 
-        ResolvedRow? resolved = RowResolver.Resolve(1, index, overlay, cache);
-
-        Assert.NotNull(resolved);
-        Assert.Equal(RowRenderState.Malformed, resolved.RenderState); // malformed takes precedence over edited
-        Assert.Equal("EDITED_ANYWAY", resolved.FieldValues[0]); // the edit itself still applies
+        Assert.NotNull(edited);
+        Assert.Equal(RowRenderState.Edited, edited.RenderState);
+        Assert.Equal("EDITED_ANYWAY", edited.FieldValues[0]);
     }
 
     [Fact]
