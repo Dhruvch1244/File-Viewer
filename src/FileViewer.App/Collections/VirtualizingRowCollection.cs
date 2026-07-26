@@ -9,9 +9,9 @@ using FileViewer.Core.Session;
 namespace FileViewer.App.Collections;
 
 /// <summary>
-/// On-demand data source for the WPF <c>DataGrid</c>'s virtualizing panel: resolves
-/// <c>visualIndex -&gt; base/synthetic row index -&gt; <see cref="RowViewModel"/></c> only when the
-/// panel actually asks for that index, so rendering never materializes every row in the file (the
+/// On-demand data source for the WPF <c>DataGrid</c>: resolves
+/// <c>pageVisualIndex -&gt; base/synthetic row index -&gt; <see cref="RowViewModel"/></c> only when the
+/// grid actually asks for that index, so rendering never materializes every row in the file (the
 /// crux of keeping a 2 GB file's grid off the GC heap). Implements the plain, non-generic
 /// <see cref="IList"/> — what <c>ItemsControl</c>/<c>DataGrid</c> actually probe for to support
 /// virtualization without realizing the whole collection up front.
@@ -22,16 +22,29 @@ namespace FileViewer.App.Collections;
 /// cached and only rebuilt when <see cref="Invalidate"/> is called (after a structural edit:
 /// add/delete/duplicate/undo/sort — never for a plain cell edit, which doesn't change row
 /// membership or order).
+///
+/// On top of that, the collection only ever *exposes* one <see cref="PageSize"/>-row page of the
+/// effective order at a time — <see cref="Count"/>/the indexer/enumerator all operate on the
+/// current page window, not the full row set. This means "select all" (which operates against
+/// whatever the DataGrid's ItemsSource currently contains) naturally scopes to "select all on this
+/// page" rather than materializing a selection across potentially millions of rows.
 /// </summary>
 public sealed class VirtualizingRowCollection(FileViewerSession session) : IList, INotifyCollectionChanged
 {
+    public const int PageSize = 20;
+
     private long[]? _effectiveOrder;
     private string? _filterText;
     private long[]? _customOrderOverride;
+    private int _pageIndex;
 
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
     private long[] EffectiveOrder => _effectiveOrder ??= BuildEffectiveOrder();
+
+    public int TotalRowCount => EffectiveOrder.Length;
+    public int PageIndex => _pageIndex;
+    public int PageCount => Math.Max(1, (int)Math.Ceiling(EffectiveOrder.Length / (double)PageSize));
 
     private long[] BuildEffectiveOrder()
     {
@@ -79,10 +92,20 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
         return [.. result];
     }
 
-    /// <summary>Recomputes which rows are visible and in what order, and notifies the grid to re-query everything.</summary>
+    /// <summary>Recomputes which rows are visible and in what order, resets to the first page, and notifies the grid to re-query everything.</summary>
     public void Invalidate()
     {
         _effectiveOrder = null;
+        _pageIndex = 0;
+        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+    }
+
+    /// <summary>Moves to a different page of the *current* effective order without recomputing it.</summary>
+    public void GoToPage(int pageIndex)
+    {
+        int clamped = Math.Clamp(pageIndex, 0, PageCount - 1);
+        if (clamped == _pageIndex) return;
+        _pageIndex = clamped;
         CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
 
@@ -107,11 +130,13 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
         Invalidate();
     }
 
-    public int Count => EffectiveOrder.Length;
+    private long RowIndexAtPageOffset(int pageOffset) => EffectiveOrder[_pageIndex * PageSize + pageOffset];
+
+    public int Count => Math.Min(PageSize, Math.Max(0, EffectiveOrder.Length - _pageIndex * PageSize));
 
     public object? this[int index]
     {
-        get => new RowViewModel(session, EffectiveOrder[index]);
+        get => new RowViewModel(session, RowIndexAtPageOffset(index));
         set => throw new NotSupportedException();
     }
 
@@ -122,23 +147,35 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
 
     public IEnumerator GetEnumerator()
     {
-        long[] order = EffectiveOrder;
-        for (int i = 0; i < order.Length; i++)
+        int count = Count;
+        for (int i = 0; i < count; i++)
         {
-            yield return new RowViewModel(session, order[i]);
+            yield return new RowViewModel(session, RowIndexAtPageOffset(i));
         }
     }
 
-    public bool Contains(object? value) => value is RowViewModel row && Array.IndexOf(EffectiveOrder, row.RowIndex) >= 0;
+    public bool Contains(object? value) =>
+        value is RowViewModel row && IndexOfRowIndex(row.RowIndex) >= 0;
 
-    public int IndexOf(object? value) => value is RowViewModel row ? Array.IndexOf(EffectiveOrder, row.RowIndex) : -1;
+    public int IndexOf(object? value) =>
+        value is RowViewModel row ? IndexOfRowIndex(row.RowIndex) : -1;
+
+    private int IndexOfRowIndex(long rowIndex)
+    {
+        int count = Count;
+        for (int i = 0; i < count; i++)
+        {
+            if (RowIndexAtPageOffset(i) == rowIndex) return i;
+        }
+        return -1;
+    }
 
     public void CopyTo(Array array, int index)
     {
-        long[] order = EffectiveOrder;
-        for (int i = 0; i < order.Length; i++)
+        int count = Count;
+        for (int i = 0; i < count; i++)
         {
-            array.SetValue(new RowViewModel(session, order[i]), index + i);
+            array.SetValue(new RowViewModel(session, RowIndexAtPageOffset(i)), index + i);
         }
     }
 

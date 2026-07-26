@@ -12,6 +12,9 @@ namespace FileViewer.App;
 
 public partial class MainWindow : Window
 {
+    /// <summary>Number of always-present, non-data columns (select checkbox, view button) prepended to every dynamically-built column set.</summary>
+    private const int FixedColumnCount = 2;
+
     private readonly MainViewModel _viewModel = new();
 
     public MainWindow()
@@ -31,7 +34,9 @@ public partial class MainWindow : Window
 
     private async void OnOpenFileClick(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Filter = "DIF files (*.dif)|*.dif|All files (*.*)|*.*" };
+        // Any file is accepted — the app itself decides whether the content is a valid DIF file
+        // and fails gracefully (with diagnostics) if not, so the dialog shouldn't gatekeep by extension.
+        var dialog = new OpenFileDialog { Filter = "All files (*.*)|*.*|DIF files (*.dif)|*.dif", FilterIndex = 1 };
         if (dialog.ShowDialog() != true) return;
 
         await _viewModel.OpenFileAsync(dialog.FileName);
@@ -62,8 +67,18 @@ public partial class MainWindow : Window
         grid.SelectedRows = [.. RowsDataGrid.SelectedItems.Cast<RowViewModel>()];
     }
 
-    /// <summary>Selects every currently-visible row (respecting the active sort/filter) so bulk operations like Delete can act on all of them — equivalent to Ctrl+A, offered as a discoverable button.</summary>
-    private void OnSelectAllClick(object sender, RoutedEventArgs e) => RowsDataGrid.SelectAll();
+    /// <summary>Header checkbox: selects/clears every row on the current page (bulk operations like Delete then act on the whole page).</summary>
+    private void OnSelectAllHeaderChecked(object sender, RoutedEventArgs e) => RowsDataGrid.SelectAll();
+
+    private void OnSelectAllHeaderUnchecked(object sender, RoutedEventArgs e) => RowsDataGrid.UnselectAll();
+
+    /// <summary>Per-row "View" button — opens a dialog listing every column/value pair for that record.</summary>
+    private void OnViewRecordClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: RowViewModel row }) return;
+        var dialog = new RowDetailView(row) { Owner = this };
+        dialog.ShowDialog();
+    }
 
     /// <summary>
     /// The grid's ItemsSource is a plain <see cref="Collections.VirtualizingRowCollection"/>, not
@@ -83,6 +98,25 @@ public partial class MainWindow : Window
     {
         RowsDataGrid.Columns.Clear();
         if (_viewModel.Grid is not { } grid) return;
+
+        RowsDataGrid.Columns.Add(new DataGridTemplateColumn
+        {
+            HeaderTemplate = (DataTemplate)FindResource("SelectAllHeaderTemplate"),
+            CellTemplate = (DataTemplate)FindResource("SelectCheckBoxCellTemplate"),
+            Width = 36,
+            CanUserResize = false,
+            CanUserSort = false,
+            CanUserReorder = false,
+        });
+        RowsDataGrid.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = string.Empty,
+            CellTemplate = (DataTemplate)FindResource("ViewButtonCellTemplate"),
+            Width = 68,
+            CanUserResize = false,
+            CanUserSort = false,
+            CanUserReorder = false,
+        });
 
         for (int i = 0; i < grid.ColumnNames.Count; i++)
         {
@@ -106,17 +140,28 @@ public partial class MainWindow : Window
             };
         }
 
-        RowsDataGrid.FrozenColumnCount = grid.FrozenColumnCount;
+        // The select-checkbox and view-button columns are always frozen in addition to however
+        // many data columns the user asks to freeze — you always want them visible.
+        RowsDataGrid.FrozenColumnCount = FixedColumnCount + grid.FrozenColumnCount;
+
+        // Live filter over the column-chooser popup's name list, driven by GridViewModel.ColumnSearchText.
+        ICollectionView columnsView = CollectionViewSource.GetDefaultView(grid.Columns);
+        columnsView.Filter = o => o is GridColumnInfo info
+            && (string.IsNullOrEmpty(grid.ColumnSearchText) || info.Name.Contains(grid.ColumnSearchText, StringComparison.OrdinalIgnoreCase));
+
         grid.PropertyChanged += (_, args) =>
         {
             switch (args.PropertyName)
             {
                 case nameof(GridViewModel.FrozenColumnCount):
-                    RowsDataGrid.FrozenColumnCount = grid.FrozenColumnCount;
+                    RowsDataGrid.FrozenColumnCount = FixedColumnCount + grid.FrozenColumnCount;
                     break;
                 case nameof(GridViewModel.CurrentSortColumn):
                 case nameof(GridViewModel.CurrentSortDirection):
                     UpdateColumnSortIndicators(grid);
+                    break;
+                case nameof(GridViewModel.ColumnSearchText):
+                    columnsView.Refresh();
                     break;
             }
         };

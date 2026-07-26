@@ -22,6 +22,7 @@ public sealed class GridViewModel : ObservableObject
     private IReadOnlyList<RowViewModel> _selectedRows = [];
     private int _frozenColumnCount;
     private string _searchText = string.Empty;
+    private string _columnSearchText = string.Empty;
     private string? _currentSortColumn;
     private SortDirection _currentSortDirection = SortDirection.Ascending;
 
@@ -29,6 +30,15 @@ public sealed class GridViewModel : ObservableObject
     {
         Session = session;
         Rows = new VirtualizingRowCollection(session);
+        Rows.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(PageIndex));
+            OnPropertyChanged(nameof(PageCount));
+            OnPropertyChanged(nameof(PageLabel));
+            OnPropertyChanged(nameof(TotalRowCount));
+            OnPropertyChanged(nameof(CanGoToPreviousPage));
+            OnPropertyChanged(nameof(CanGoToNextPage));
+        };
         ColumnNames = session.FileIndex.Header.ColumnNames;
         Columns = new ObservableCollection<GridColumnInfo>(
             ColumnNames.Select((name, index) => new GridColumnInfo(name, index)));
@@ -41,6 +51,9 @@ public sealed class GridViewModel : ObservableObject
 
         ApplySearchCommand = RelayCommand.Create(() => Rows.ApplyFilter(SearchText));
         ClearSearchCommand = RelayCommand.Create(() => { SearchText = string.Empty; Rows.ApplyFilter(null); });
+
+        PreviousPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex - 1), () => CanGoToPreviousPage);
+        NextPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex + 1), () => CanGoToNextPage);
     }
 
     public FileViewerSession Session { get; }
@@ -87,6 +100,20 @@ public sealed class GridViewModel : ObservableObject
         set => SetField(ref _searchText, value);
     }
 
+    /// <summary>Live substring filter over <see cref="Columns"/>' names, applied per-keystroke by the column-chooser popup (cheap — it's just filtering an in-memory name list, not decoding rows).</summary>
+    public string ColumnSearchText
+    {
+        get => _columnSearchText;
+        set => SetField(ref _columnSearchText, value);
+    }
+
+    public int PageIndex => Rows.PageIndex;
+    public int PageCount => Rows.PageCount;
+    public int TotalRowCount => Rows.TotalRowCount;
+    public string PageLabel => $"Page {PageIndex + 1} of {PageCount}";
+    public bool CanGoToPreviousPage => Rows.PageIndex > 0;
+    public bool CanGoToNextPage => Rows.PageIndex < Rows.PageCount - 1;
+
     public ICommand ClearSortCommand { get; }
     public ICommand AddRowCommand { get; }
     public ICommand DuplicateSelectedRowCommand { get; }
@@ -94,6 +121,8 @@ public sealed class GridViewModel : ObservableObject
     public ICommand UndoCommand { get; }
     public ICommand ApplySearchCommand { get; }
     public ICommand ClearSearchCommand { get; }
+    public ICommand PreviousPageCommand { get; }
+    public ICommand NextPageCommand { get; }
 
     /// <summary>Invoked from the DataGrid's Sorting event (column header click). Toggles ascending/descending on repeated clicks of the same column.</summary>
     public void SortByColumn(string columnName)

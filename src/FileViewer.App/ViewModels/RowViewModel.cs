@@ -48,4 +48,17 @@ public sealed class RowViewModel(FileViewerSession session, long rowIndex) : INo
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RenderState)));
         }
     }
+
+    /// <summary>Every column name paired with this row's current value — backs the "View record" detail dialog.</summary>
+    public IReadOnlyList<(string Column, string Value)> GetFieldPairs()
+    {
+        IReadOnlyList<string> columnNames = session.FileIndex.Header.ColumnNames;
+        IReadOnlyList<string> values = Resolved.FieldValues;
+        var pairs = new (string, string)[columnNames.Count];
+        for (int i = 0; i < columnNames.Count; i++)
+        {
+            pairs[i] = (columnNames[i], i < values.Count ? values[i] : string.Empty);
+        }
+        return pairs;
+    }
 }

@@ -12,6 +12,21 @@
         FontSize="13">
     <Window.Resources>
         <sysconv:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+
+        <DataTemplate x:Key="SelectAllHeaderTemplate">
+            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Checked="OnSelectAllHeaderChecked" Unchecked="OnSelectAllHeaderUnchecked"
+                      ToolTip="Select/clear all rows on this page" />
+        </DataTemplate>
+
+        <DataTemplate x:Key="SelectCheckBoxCellTemplate">
+            <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsChecked="{Binding RelativeSource={RelativeSource AncestorType=DataGridRow}, Path=IsSelected, Mode=TwoWay}" />
+        </DataTemplate>
+
+        <DataTemplate x:Key="ViewButtonCellTemplate">
+            <Button Content="View" Style="{StaticResource ToolbarButtonStyle}" Padding="8,2" FontSize="11" Click="OnViewRecordClick" />
+        </DataTemplate>
     </Window.Resources>
     <Grid>
         <DockPanel>
@@ -25,7 +40,6 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Border Background="{StaticResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
-                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Click="OnSelectAllClick" />
                                 <Button Content="Add" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.AddRowCommand}" />
                                 <Button Content="Duplicate" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
                                 <Button Content="Delete" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DeleteSelectedRowsCommand}" />
@@ -89,6 +103,22 @@
                 </Grid>
             </Border>
 
+            <!-- ============================== Pagination bar ========================== -->
+            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                <Grid Margin="16,8">
+                    <TextBlock Text="{Binding Grid.TotalRowCount, StringFormat='{}{0:N0} record(s)'}"
+                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Button Content="‹ Previous" Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding Grid.PreviousPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
+                        <TextBlock Text="{Binding Grid.PageLabel}" VerticalAlignment="Center" Margin="12,0"
+                                   FontSize="12" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <Button Content="Next ›" Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding Grid.NextPageCommand}" IsEnabled="{Binding Grid.CanGoToNextPage}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
             <!-- ============================== Grid ==================================== -->
             <DataGrid x:Name="RowsDataGrid"
                       Margin="16"
@@ -115,13 +145,15 @@
 
         <!-- ============================== Column chooser ============================ -->
         <Popup x:Name="ColumnsPopup" PlacementTarget="{Binding ElementName=ColumnsButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
-            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" MaxHeight="420" Margin="0,4,0,0">
+            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" MaxHeight="420" Width="240" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel>
-                        <TextBlock Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" />
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" />
+                    <TextBox DockPanel.Dock="Top" Margin="0,0,0,8"
+                             Text="{Binding Grid.ColumnSearchText, UpdateSourceTrigger=PropertyChanged}" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding Grid.Columns}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -129,8 +161,8 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                    </StackPanel>
-                </ScrollViewer>
+                    </ScrollViewer>
+                </DockPanel>
             </Border>
         </Popup>
     </Grid>
