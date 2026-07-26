@@ -4,89 +4,132 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:FileViewer.App"
-        xmlns:conv="clr-namespace:FileViewer.App.Converters"
         xmlns:sysconv="clr-namespace:System.Windows.Controls;assembly=PresentationFramework"
         mc:Ignorable="d"
-        Title="Bloomberg File Viewer" Height="700" Width="1200">
+        Title="Bloomberg File Viewer" Height="720" Width="1280"
+        Background="{StaticResource CanvasBrush}"
+        FontFamily="{StaticResource UiFontFamily}"
+        FontSize="13">
     <Window.Resources>
-        <conv:RowRenderStateToBrushConverter x:Key="RowRenderStateToBrushConverter" />
         <sysconv:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
     </Window.Resources>
     <Grid>
         <DockPanel>
-            <ToolBar DockPanel.Dock="Top">
-                <Button x:Name="OpenButton" Content="Open..." Click="OnOpenFileClick" />
-                <Separator />
-                <Button Content="Sort ID ↑" Command="{Binding Grid.SortByIdAscendingCommand}" />
-                <Button Content="Sort ID ↓" Command="{Binding Grid.SortByIdDescendingCommand}" />
-                <Button Content="Clear Sort" Command="{Binding Grid.ClearSortCommand}" />
-                <Separator />
-                <Button Content="Add Row" Command="{Binding Grid.AddRowCommand}" />
-                <Button Content="Duplicate" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
-                <Button Content="Delete" Command="{Binding Grid.DeleteSelectedRowsCommand}" />
-                <Button Content="Undo" Command="{Binding Grid.UndoCommand}" />
-                <Separator />
-                <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                <TextBox x:Name="SearchTextBox" Width="140" VerticalAlignment="Center"
-                         Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
-                         KeyDown="OnSearchTextBoxKeyDown" />
-                <Button Content="Find" Command="{Binding Grid.ApplySearchCommand}" />
-                <Button Content="Clear" Command="{Binding Grid.ClearSearchCommand}" />
-                <Separator />
-                <Button x:Name="ColumnsButton" Content="Columns..." Click="OnColumnsButtonClick" />
-                <TextBlock Text="Frozen columns:" VerticalAlignment="Center" Margin="8,0,4,0" />
-                <TextBox Width="30" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
-                <Separator />
-                <Button x:Name="ExportButton" Content="Export..." Click="OnExportButtonClick" />
-            </ToolBar>
 
-            <StatusBar DockPanel.Dock="Bottom">
-                <StatusBarItem>
-                    <TextBlock Text="{Binding StatusMessage}" />
-                </StatusBarItem>
-                <StatusBarItem HorizontalAlignment="Right">
-                    <ProgressBar Width="200" Height="16" Minimum="0" Maximum="100"
+            <!-- ============================== Toolbar ============================== -->
+            <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <DockPanel Margin="16,10">
+                    <Button DockPanel.Dock="Right" x:Name="ExportButton" Content="Export" Style="{StaticResource PrimaryButtonStyle}" Click="OnExportButtonClick" Margin="12,0,0,0" />
+                    <Button DockPanel.Dock="Right" x:Name="OpenButton" Content="Open File" Style="{StaticResource PrimaryButtonStyle}" Click="OnOpenFileClick" />
+
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Background="{StaticResource CanvasBrush}" CornerRadius="6" Padding="2">
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Click="OnSelectAllClick" />
+                                <Button Content="Add" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.AddRowCommand}" />
+                                <Button Content="Duplicate" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
+                                <Button Content="Delete" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DeleteSelectedRowsCommand}" />
+                                <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
+
+                        <Border Background="{StaticResource CanvasBrush}" CornerRadius="6" Padding="2">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
+                                <Button Content="Clear sort" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.ClearSortCommand}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
+
+                        <Border Background="{StaticResource CanvasBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="2">
+                            <StackPanel Orientation="Horizontal">
+                                <Grid Width="200" VerticalAlignment="Center">
+                                    <TextBlock Text="Search all columns" Foreground="{StaticResource TextSecondaryBrush}" Margin="9,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Grid.SearchText.Length}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox x:Name="SearchTextBox" BorderThickness="0" Background="Transparent"
+                                             Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                             KeyDown="OnSearchTextBoxKeyDown" />
+                                </Grid>
+                                <Button Content="Find" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.ApplySearchCommand}" />
+                                <Button Content="✕" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6" Command="{Binding Grid.ClearSearchCommand}" ToolTip="Clear search" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="FROZEN COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox Width="34" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" HorizontalContentAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- ============================== Status bar ============================= -->
+            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                <Grid Margin="16,10">
+                    <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                    <ProgressBar Width="220" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                 Minimum="0" Maximum="100"
                                  Value="{Binding IndexingProgressPercent, Mode=OneWay}"
                                  Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVisibilityConverter}}" />
-                </StatusBarItem>
-            </StatusBar>
+                </Grid>
+            </Border>
 
+            <!-- ============================== Grid ==================================== -->
             <DataGrid x:Name="RowsDataGrid"
+                      Margin="16"
                       ItemsSource="{Binding Grid.Rows}"
                       SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
                       SelectionChanged="OnGridSelectionChanged"
+                      Sorting="OnDataGridSorting"
                       SelectionMode="Extended"
                       AutoGenerateColumns="False"
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"
                       CanUserResizeColumns="True"
                       CanUserReorderColumns="True"
+                      CanUserSortColumns="True"
                       EnableRowVirtualization="True"
                       EnableColumnVirtualization="True"
-                      RowHeight="24"
+                      RowHeight="28"
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
                       VirtualizingPanel.ScrollUnit="Pixel"
                       AlternationCount="0"
-                      HeadersVisibility="Column">
-                <DataGrid.RowStyle>
-                    <Style TargetType="DataGridRow">
-                        <Setter Property="Background" Value="{Binding RenderState, Converter={StaticResource RowRenderStateToBrushConverter}}" />
-                    </Style>
-                </DataGrid.RowStyle>
-            </DataGrid>
+                      HeadersVisibility="Column" />
         </DockPanel>
 
-        <Popup x:Name="ColumnsPopup" PlacementTarget="{Binding ElementName=ColumnsButton}" Placement="Bottom" StaysOpen="False">
-            <Border Background="White" BorderBrush="Gray" BorderThickness="1" Padding="8" MaxHeight="400">
+        <!-- ============================== Column chooser ============================ -->
+        <Popup x:Name="ColumnsPopup" PlacementTarget="{Binding ElementName=ColumnsButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" MaxHeight="420" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding Grid.Columns}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" Margin="2" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <StackPanel>
+                        <TextBlock Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" />
+                        <ItemsControl ItemsSource="{Binding Grid.Columns}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" Margin="4,4" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                 </ScrollViewer>
             </Border>
         </Popup>

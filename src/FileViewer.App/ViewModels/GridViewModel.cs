@@ -10,10 +10,11 @@ namespace FileViewer.App.ViewModels;
 
 /// <summary>
 /// Owns the grid's data source, column list, current selection, and the row-operation/sort
-/// commands. Sorting is scoped to the "_ID" column specifically — that's the only column Core's
-/// indexer extracts an unmanaged <see cref="Core.Native.SortKey"/> for (PRS §6.3); sorting by an
-/// arbitrary column would mean decoding every row up front, defeating the whole point of the
-/// unmanaged-index design, so it isn't offered as a fast interactive sort here.
+/// commands. Clicking the "_ID" column header uses Core's fast unmanaged-key sort
+/// (<see cref="FileViewerSession.ApplySort"/>); clicking any other column header falls back to
+/// <see cref="RowSorter.SortByColumn"/>, which decodes every candidate row — the same acknowledged
+/// slower path as search/filter (PRS §8), since there's no pre-extracted sort key for anything but
+/// "_ID".
 /// </summary>
 public sealed class GridViewModel : ObservableObject
 {
@@ -21,6 +22,8 @@ public sealed class GridViewModel : ObservableObject
     private IReadOnlyList<RowViewModel> _selectedRows = [];
     private int _frozenColumnCount;
     private string _searchText = string.Empty;
+    private string? _currentSortColumn;
+    private SortDirection _currentSortDirection = SortDirection.Ascending;
 
     public GridViewModel(FileViewerSession session)
     {
@@ -30,10 +33,7 @@ public sealed class GridViewModel : ObservableObject
         Columns = new ObservableCollection<GridColumnInfo>(
             ColumnNames.Select((name, index) => new GridColumnInfo(name, index)));
 
-        SortByIdAscendingCommand = RelayCommand.Create(() => ApplySort(SortDirection.Ascending));
-        SortByIdDescendingCommand = RelayCommand.Create(() => ApplySort(SortDirection.Descending));
-        ClearSortCommand = RelayCommand.Create(() => { Session.ClearSort(); Rows.Invalidate(); });
-
+        ClearSortCommand = RelayCommand.Create(ClearSort, () => CurrentSortColumn is not null);
         AddRowCommand = RelayCommand.Create(AddRow);
         DuplicateSelectedRowCommand = RelayCommand.Create(DuplicateSelectedRow, () => SelectedRow is not null);
         DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => SelectedRows.Count > 0);
@@ -47,6 +47,19 @@ public sealed class GridViewModel : ObservableObject
     public VirtualizingRowCollection Rows { get; }
     public IReadOnlyList<string> ColumnNames { get; }
     public ObservableCollection<GridColumnInfo> Columns { get; }
+
+    /// <summary>Name of the column the grid is currently sorted by, or null if unsorted (file order). Drives the header sort-arrow indicator in code-behind.</summary>
+    public string? CurrentSortColumn
+    {
+        get => _currentSortColumn;
+        private set => SetField(ref _currentSortColumn, value);
+    }
+
+    public SortDirection CurrentSortDirection
+    {
+        get => _currentSortDirection;
+        private set => SetField(ref _currentSortDirection, value);
+    }
 
     public int FrozenColumnCount
     {
@@ -74,8 +87,6 @@ public sealed class GridViewModel : ObservableObject
         set => SetField(ref _searchText, value);
     }
 
-    public ICommand SortByIdAscendingCommand { get; }
-    public ICommand SortByIdDescendingCommand { get; }
     public ICommand ClearSortCommand { get; }
     public ICommand AddRowCommand { get; }
     public ICommand DuplicateSelectedRowCommand { get; }
@@ -84,10 +95,54 @@ public sealed class GridViewModel : ObservableObject
     public ICommand ApplySearchCommand { get; }
     public ICommand ClearSearchCommand { get; }
 
-    private void ApplySort(SortDirection direction)
+    /// <summary>Invoked from the DataGrid's Sorting event (column header click). Toggles ascending/descending on repeated clicks of the same column.</summary>
+    public void SortByColumn(string columnName)
     {
-        Session.ApplySort(direction);
+        SortDirection direction = columnName == CurrentSortColumn && CurrentSortDirection == SortDirection.Ascending
+            ? SortDirection.Descending
+            : SortDirection.Ascending;
+
+        if (columnName == "_ID")
+        {
+            Rows.ClearCustomOrder();
+            Session.ApplySort(direction);
+        }
+        else
+        {
+            Session.ClearSort();
+            List<long> candidates = CollectBaseAndAddedRowIndices();
+            List<long> sorted = RowSorter.SortByColumn(candidates, columnName, direction, Session.FileIndex, Session.Overlay, Session.Cache);
+            Rows.ApplyCustomOrder([.. sorted]);
+        }
+
+        CurrentSortColumn = columnName;
+        CurrentSortDirection = direction;
         Rows.Invalidate();
+    }
+
+    public void ClearSort()
+    {
+        Session.ClearSort();
+        Rows.ClearCustomOrder();
+        CurrentSortColumn = null;
+        Rows.Invalidate();
+    }
+
+    private List<long> CollectBaseAndAddedRowIndices()
+    {
+        var candidates = new List<long>();
+        for (nuint i = 0; i < Session.CurrentOrder.Count; i++)
+        {
+            candidates.Add(Session.CurrentOrder[i].RowIndex);
+        }
+        foreach (RowOp op in Session.Overlay.RowOps)
+        {
+            if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && Session.Overlay.GetRowState(op.RowIndex) != RowState.Deleted)
+            {
+                candidates.Add(op.RowIndex);
+            }
+        }
+        return candidates;
     }
 
     private void AddRow()

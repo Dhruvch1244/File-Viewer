@@ -1,21 +1,36 @@
 <Window x:Class="FileViewer.App.Views.ExportDialogView"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Export" Height="420" Width="520" WindowStartupLocation="CenterOwner">
-    <DockPanel Margin="10">
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
-            <TextBlock Text="Format:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <RadioButton Content="DIF" GroupName="Format" IsChecked="{Binding IsDifSelected}" Margin="0,0,8,0" />
-            <RadioButton Content="CSV" GroupName="Format" IsChecked="{Binding IsCsvSelected}" Margin="0,0,8,0" />
-            <RadioButton Content="TSV" GroupName="Format" IsChecked="{Binding IsTsvSelected}" Margin="0,0,8,0" />
-            <RadioButton Content="JSON" GroupName="Format" IsChecked="{Binding IsJsonSelected}" />
+        Title="Export" Height="460" Width="560" WindowStartupLocation="CenterOwner"
+        Background="{StaticResource CanvasBrush}"
+        FontFamily="{StaticResource UiFontFamily}"
+        FontSize="13">
+    <DockPanel Margin="24">
+        <TextBlock DockPanel.Dock="Top" Text="EXPORT" FontSize="11" FontWeight="SemiBold"
+                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,16" />
+
+        <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,16">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton Content="DIF" GroupName="Format" IsChecked="{Binding IsDifSelected}" Margin="0,0,20,0" />
+                <RadioButton Content="CSV" GroupName="Format" IsChecked="{Binding IsCsvSelected}" Margin="0,0,20,0" />
+                <RadioButton Content="TSV" GroupName="Format" IsChecked="{Binding IsTsvSelected}" Margin="0,0,20,0" />
+                <RadioButton Content="JSON" GroupName="Format" IsChecked="{Binding IsJsonSelected}" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Cancel" Width="96" Style="{StaticResource ToolbarButtonStyle}" Click="OnCancelClick" Margin="0,0,8,0" />
+            <Button Content="Export..." Width="110" Style="{StaticResource PrimaryButtonStyle}" Click="OnExportClick" />
         </StackPanel>
-        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button Content="Export..." Width="90" Click="OnExportClick" Margin="0,0,8,0" />
-            <Button Content="Cancel" Width="90" Click="OnCancelClick" />
-        </StackPanel>
-        <TextBlock DockPanel.Dock="Top" Text="Preview (first 2 rows):" Margin="0,0,0,4" />
-        <TextBox Text="{Binding PreviewText, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas"
-                 TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+
+        <TextBlock DockPanel.Dock="Top" Text="PREVIEW — FIRST 2 ROWS" FontSize="11" FontWeight="SemiBold"
+                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,8" />
+        <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+            <TextBox Text="{Binding PreviewText, Mode=OneWay}" IsReadOnly="True"
+                     BorderThickness="0" Background="Transparent" Padding="12"
+                     FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                     TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+        </Border>
     </DockPanel>
 </Window>

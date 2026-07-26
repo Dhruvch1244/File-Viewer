@@ -1,11 +1,16 @@
 using System.Text;
+using FileViewer.Core.Caching;
+using FileViewer.Core.Indexing;
 using FileViewer.Core.Native;
+using FileViewer.Core.Overlay;
 using FileViewer.Core.Sorting;
 
 namespace FileViewer.Core.Tests.Sorting;
 
 public class RowSorterTests
 {
+    private static string FixturePath(string fileName) => Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName);
+
     private static SortKey MakeKey(string text, long rowIndex)
     {
         var key = new SortKey { RowIndex = rowIndex };
@@ -97,5 +102,46 @@ public class RowSorterTests
         using UnmanagedArray<SortKey> sorted = RowSorter.SortByKey(source);
 
         Assert.Equal((nuint)0, sorted.Count);
+    }
+
+    [Fact]
+    public async Task SortByColumn_NumericColumn_SortsByValueNotLexicographically()
+    {
+        // PRICE values are 100.50 / 101.25 / 99.75 for rows 0/1/2 — lexicographic order would put
+        // "100.50" before "99.75"; numeric-aware sort must not.
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<long> ascending = RowSorter.SortByColumn([0, 1, 2], "PRICE", SortDirection.Ascending, index, overlay, cache);
+        List<long> descending = RowSorter.SortByColumn([0, 1, 2], "PRICE", SortDirection.Descending, index, overlay, cache);
+
+        Assert.Equal([2L, 0L, 1L], ascending);
+        Assert.Equal([1L, 0L, 2L], descending);
+    }
+
+    [Fact]
+    public async Task SortByColumn_ReflectsEditedValuesNotOriginalFileContent()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        overlay.EditCell(1, "PRICE", "1.00"); // row 1 was 101.25, now the smallest
+
+        List<long> ascending = RowSorter.SortByColumn([0, 1, 2], "PRICE", SortDirection.Ascending, index, overlay, cache);
+
+        Assert.Equal([1L, 2L, 0L], ascending);
+    }
+
+    [Fact]
+    public async Task SortByColumn_UnknownColumnName_ReturnsInputUnchanged()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<long> result = RowSorter.SortByColumn([2, 0, 1], "NO_SUCH_COLUMN", SortDirection.Ascending, index, overlay, cache);
+
+        Assert.Equal([2L, 0L, 1L], result);
     }
 }

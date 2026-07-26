@@ -27,6 +27,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
 {
     private long[]? _effectiveOrder;
     private string? _filterText;
+    private long[]? _customOrderOverride;
 
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
@@ -34,32 +35,48 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
 
     private long[] BuildEffectiveOrder()
     {
-        var order = new List<long>();
-
-        UnmanagedArray<SortKey> current = session.CurrentOrder;
-        for (nuint i = 0; i < current.Count; i++)
+        IEnumerable<long> candidates;
+        if (_customOrderOverride is not null)
         {
-            long rowIndex = current[i].RowIndex;
-            if (session.Overlay.GetRowState(rowIndex) != RowState.Deleted)
+            // A generic (non-"_ID") column-header sort was applied — it already reflects the full
+            // base+added row set as of when it ran (see GridViewModel.SortByColumn). Rows added
+            // afterward won't appear here until the sort is reapplied or cleared; that's an
+            // accepted limitation of this "arbitrary column" slow path, not a bug.
+            candidates = _customOrderOverride;
+        }
+        else
+        {
+            var order = new List<long>();
+            UnmanagedArray<SortKey> current = session.CurrentOrder;
+            for (nuint i = 0; i < current.Count; i++)
             {
-                order.Add(rowIndex);
+                order.Add(current[i].RowIndex);
             }
+            foreach (RowOp op in session.Overlay.RowOps)
+            {
+                if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && session.Overlay.GetRowState(op.RowIndex) != RowState.Deleted)
+                {
+                    order.Add(op.RowIndex);
+                }
+            }
+            candidates = order;
         }
 
-        foreach (RowOp op in session.Overlay.RowOps)
+        var result = new List<long>();
+        foreach (long rowIndex in candidates)
         {
-            if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && session.Overlay.GetRowState(op.RowIndex) != RowState.Deleted)
+            if (session.Overlay.GetRowState(rowIndex) != RowState.Deleted)
             {
-                order.Add(op.RowIndex);
+                result.Add(rowIndex);
             }
         }
 
         if (!string.IsNullOrEmpty(_filterText))
         {
-            order = RowFilter.Filter(order, _filterText, session.FileIndex, session.Overlay, session.Cache);
+            result = RowFilter.Filter(result, _filterText, session.FileIndex, session.Overlay, session.Cache);
         }
 
-        return [.. order];
+        return [.. result];
     }
 
     /// <summary>Recomputes which rows are visible and in what order, and notifies the grid to re-query everything.</summary>
@@ -73,6 +90,20 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
     public void ApplyFilter(string? filterText)
     {
         _filterText = filterText;
+        Invalidate();
+    }
+
+    /// <summary>Overrides the base-row order with a precomputed sort (used for clicking a non-"_ID" column header — see <see cref="ViewModels.GridViewModel.SortByColumn"/>).</summary>
+    public void ApplyCustomOrder(long[] order)
+    {
+        _customOrderOverride = order;
+        Invalidate();
+    }
+
+    /// <summary>Reverts to <see cref="Session.FileViewerSession.CurrentOrder"/> (file order, or the fast "_ID" sort).</summary>
+    public void ClearCustomOrder()
+    {
+        _customOrderOverride = null;
         Invalidate();
     }
 

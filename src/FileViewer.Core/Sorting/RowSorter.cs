@@ -1,4 +1,7 @@
+using FileViewer.Core.Caching;
+using FileViewer.Core.Indexing;
 using FileViewer.Core.Native;
+using FileViewer.Core.Overlay;
 
 namespace FileViewer.Core.Sorting;
 
@@ -33,5 +36,43 @@ public static class RowSorter
         });
 
         return result;
+    }
+
+    /// <summary>
+    /// Decode-based sort over an arbitrary column — the same acknowledged slower path as
+    /// <see cref="Filtering.RowFilter"/> (PRS §8), since there is no pre-extracted unmanaged sort
+    /// key for anything but "_ID". Values that parse as numbers on both sides of a comparison sort
+    /// numerically; otherwise falls back to ordinal string comparison. Uses a stable sort (LINQ's
+    /// OrderBy), so ties keep <paramref name="rowIndices"/>'s original relative order.
+    /// </summary>
+    public static List<long> SortByColumn(
+        IReadOnlyList<long> rowIndices,
+        string columnName,
+        SortDirection direction,
+        FileIndex fileIndex,
+        EditOverlay overlay,
+        DecodedRowCache cache)
+    {
+        int columnIndex = fileIndex.Header.ColumnIndexOf(columnName);
+        if (columnIndex < 0)
+        {
+            return [.. rowIndices];
+        }
+
+        var keyed = new List<(long RowIndex, string Value)>(rowIndices.Count);
+        foreach (long rowIndex in rowIndices)
+        {
+            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
+            string value = resolved is not null && columnIndex < resolved.FieldValues.Count
+                ? resolved.FieldValues[columnIndex]
+                : string.Empty;
+            keyed.Add((rowIndex, value));
+        }
+
+        IOrderedEnumerable<(long RowIndex, string Value)> ordered = direction == SortDirection.Ascending
+            ? keyed.OrderBy(k => k.Value, NumericAwareStringComparer.Instance)
+            : keyed.OrderByDescending(k => k.Value, NumericAwareStringComparer.Instance);
+
+        return [.. ordered.Select(k => k.RowIndex)];
     }
 }

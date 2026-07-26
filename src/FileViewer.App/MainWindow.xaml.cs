@@ -62,6 +62,23 @@ public partial class MainWindow : Window
         grid.SelectedRows = [.. RowsDataGrid.SelectedItems.Cast<RowViewModel>()];
     }
 
+    /// <summary>Selects every currently-visible row (respecting the active sort/filter) so bulk operations like Delete can act on all of them — equivalent to Ctrl+A, offered as a discoverable button.</summary>
+    private void OnSelectAllClick(object sender, RoutedEventArgs e) => RowsDataGrid.SelectAll();
+
+    /// <summary>
+    /// The grid's ItemsSource is a plain <see cref="Collections.VirtualizingRowCollection"/>, not
+    /// an <see cref="System.ComponentModel.ICollectionView"/> — WPF's built-in header-click sort
+    /// has nothing to act on, so we take over entirely and drive it through
+    /// <see cref="GridViewModel.SortByColumn"/> instead.
+    /// </summary>
+    private void OnDataGridSorting(object sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;
+        if (_viewModel.Grid is not { } grid || string.IsNullOrEmpty(e.Column.SortMemberPath)) return;
+
+        grid.SortByColumn(e.Column.SortMemberPath);
+    }
+
     private void RebuildColumns()
     {
         RowsDataGrid.Columns.Clear();
@@ -69,10 +86,13 @@ public partial class MainWindow : Window
 
         for (int i = 0; i < grid.ColumnNames.Count; i++)
         {
+            string columnName = grid.ColumnNames[i];
             var column = new DataGridTextColumn
             {
-                Header = grid.ColumnNames[i],
+                Header = columnName.ToUpperInvariant(),
+                SortMemberPath = columnName,
                 Binding = new Binding($"[{i}]") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.LostFocus },
+                EditingElementStyle = (Style)FindResource("CellEditTextBoxStyle"),
             };
             RowsDataGrid.Columns.Add(column);
 
@@ -89,10 +109,35 @@ public partial class MainWindow : Window
         RowsDataGrid.FrozenColumnCount = grid.FrozenColumnCount;
         grid.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName == nameof(GridViewModel.FrozenColumnCount))
+            switch (args.PropertyName)
             {
-                RowsDataGrid.FrozenColumnCount = grid.FrozenColumnCount;
+                case nameof(GridViewModel.FrozenColumnCount):
+                    RowsDataGrid.FrozenColumnCount = grid.FrozenColumnCount;
+                    break;
+                case nameof(GridViewModel.CurrentSortColumn):
+                case nameof(GridViewModel.CurrentSortDirection):
+                    UpdateColumnSortIndicators(grid);
+                    break;
             }
         };
+    }
+
+    private void UpdateColumnSortIndicators(GridViewModel grid)
+    {
+        foreach (DataGridColumn column in RowsDataGrid.Columns)
+        {
+            string? columnName = column.SortMemberPath;
+            if (string.IsNullOrEmpty(columnName))
+            {
+                column.SortDirection = null;
+                continue;
+            }
+
+            column.SortDirection = columnName == grid.CurrentSortColumn
+                ? grid.CurrentSortDirection == Core.Sorting.SortDirection.Ascending
+                    ? ListSortDirection.Ascending
+                    : ListSortDirection.Descending
+                : null;
+        }
     }
 }
