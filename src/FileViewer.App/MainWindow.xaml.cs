@@ -100,45 +100,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnGridSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_viewModel.Grid is not { } grid) return;
-        grid.SelectedRows = [.. RowsDataGrid.SelectedItems.Cast<RowViewModel>()];
-    }
+    /// <summary>Header checkbox: selects/clears every row matching the active filters, across every page — see <see cref="ViewModels.RowSelectionState"/>.</summary>
+    private void OnSelectAllHeaderChecked(object sender, RoutedEventArgs e) => _viewModel.Grid?.SelectAllRows();
 
-    /// <summary>
-    /// Header checkbox: checks every row box on the current page for visual feedback, then widens
-    /// the actual selection to every row matching the active filters across every page — so
-    /// Delete/bulk actions act on the full result set, not just the ~20 rows the grid renders at
-    /// once. SelectAll() fires SelectionChanged synchronously (narrowing Grid.SelectedRows back to
-    /// just this page), so SelectAllRows() must run after it to have the final say.
-    /// </summary>
-    private void OnSelectAllHeaderChecked(object sender, RoutedEventArgs e)
-    {
-        RowsDataGrid.SelectAll();
-        _viewModel.Grid?.SelectAllRows();
-    }
-
-    private void OnSelectAllHeaderUnchecked(object sender, RoutedEventArgs e)
-    {
-        RowsDataGrid.UnselectAll();
-        _viewModel.Grid?.ClearAllRowSelection();
-    }
-
-    /// <summary>
-    /// See the comment on SelectCheckBoxCellTemplate in MainWindow.xaml: DataGrid's default
-    /// click-to-select handling fires on the same mouse event as this checkbox's own click and
-    /// would otherwise replace the whole selection with just the clicked row. Toggling manually
-    /// and marking the event handled here lets multiple rows accumulate in the selection.
-    /// </summary>
-    private void OnRowCheckBoxPreviewMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is CheckBox checkBox)
-        {
-            checkBox.IsChecked = !(checkBox.IsChecked ?? false);
-        }
-        e.Handled = true;
-    }
+    private void OnSelectAllHeaderUnchecked(object sender, RoutedEventArgs e) => _viewModel.Grid?.ClearAllRowSelection();
 
     /// <summary>Per-row "View" button — opens a dialog listing every column/value pair for that record.</summary>
     private void OnViewRecordClick(object sender, RoutedEventArgs e)

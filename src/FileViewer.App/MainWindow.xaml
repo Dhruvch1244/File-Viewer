@@ -16,21 +16,16 @@
         <DataTemplate x:Key="SelectAllHeaderTemplate">
             <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
                       Checked="OnSelectAllHeaderChecked" Unchecked="OnSelectAllHeaderUnchecked"
-                      ToolTip="Select/clear all rows matching the current filter" />
+                      ToolTip="Select/clear all rows matching the current filter"
+                      AutomationProperties.Name="Select all rows" />
         </DataTemplate>
 
         <DataTemplate x:Key="SelectCheckBoxCellTemplate">
-            <!--
-                DataGrid's own click-to-select logic also fires when you click this checkbox
-                (they share the same routed mouse event), which was silently collapsing multi-row
-                selection down to whatever row was clicked last — checking several rows and hitting
-                Delete only ever affected the last one. PreviewMouseLeftButtonDown intercepts the
-                click, toggles the box manually, and marks the event handled before DataGrid's own
-                selection logic sees it, so checking multiple rows now actually accumulates.
-            -->
+            <!-- Bound directly to the row's own IsSelected (backed by RowSelectionState, not the
+                 DataGrid's native per-page selection) so bulk selection survives paging. -->
             <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsChecked="{Binding RelativeSource={RelativeSource AncestorType=DataGridRow}, Path=IsSelected, Mode=TwoWay}"
-                      PreviewMouseLeftButtonDown="OnRowCheckBoxPreviewMouseDown" />
+                      IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                      AutomationProperties.Name="Select row" />
         </DataTemplate>
 
         <DataTemplate x:Key="ViewButtonCellTemplate">
@@ -130,13 +125,13 @@
                                 <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" />
                             </StackPanel>
                         </Border>
-                        <TextBlock Text="{Binding Grid.SelectedRows.Count, StringFormat='{}{0} selected'}" VerticalAlignment="Center"
+                        <TextBlock Text="{Binding Grid.SelectedCount, StringFormat='{}{0} selected'}" VerticalAlignment="Center"
                                    Margin="8,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Visible" />
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Grid.SelectedRows.Count}" Value="0">
+                                        <DataTrigger Binding="{Binding Grid.SelectedCount}" Value="0">
                                             <Setter Property="Visibility" Value="Collapsed" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -223,7 +218,6 @@
                       Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}"
                       ItemsSource="{Binding Grid.Rows}"
                       SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
-                      SelectionChanged="OnGridSelectionChanged"
                       PreviewMouseLeftButtonDown="OnDataGridPreviewMouseLeftButtonDown"
                       PreviewMouseRightButtonDown="OnDataGridPreviewMouseRightButtonDown"
                       SelectionMode="Extended"

@@ -25,11 +25,11 @@ namespace FileViewer.App.Collections;
 ///
 /// On top of that, the collection only ever *exposes* one <see cref="PageSize"/>-row page of the
 /// effective order at a time — <see cref="Count"/>/the indexer/enumerator all operate on the
-/// current page window, not the full row set. This means "select all" (which operates against
-/// whatever the DataGrid's ItemsSource currently contains) naturally scopes to "select all on this
-/// page" rather than materializing a selection across potentially millions of rows.
+/// current page window, not the full row set. Checkbox-based selection (which rows survive
+/// paging) is tracked separately in <see cref="ViewModels.RowSelectionState"/>, not here — see its
+/// doc comment for why that has to live outside any single page of <see cref="RowViewModel"/>s.
 /// </summary>
-public sealed class VirtualizingRowCollection(FileViewerSession session) : IList, INotifyCollectionChanged
+public sealed class VirtualizingRowCollection(FileViewerSession session, RowSelectionState selection) : IList, INotifyCollectionChanged
 {
     public const int PageSize = 20;
 
@@ -115,6 +115,15 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
         CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
 
+    /// <summary>
+    /// Forces the grid to re-query every row on the current page (fresh <see cref="RowViewModel"/>
+    /// instances) without touching the effective order, page index, or scroll position — used
+    /// after a bulk selection change (select all / clear all) so on-screen checkboxes reflect it
+    /// immediately, without the page-reset side effect <see cref="Invalidate"/> would cause.
+    /// </summary>
+    public void RefreshCurrentPage() =>
+        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+
     /// <summary>Moves to a different page of the *current* effective order without recomputing it.</summary>
     public void GoToPage(int pageIndex)
     {
@@ -178,7 +187,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
 
     public object? this[int index]
     {
-        get => new RowViewModel(session, RowIndexAtPageOffset(index));
+        get => new RowViewModel(session, RowIndexAtPageOffset(index), selection);
         set => throw new NotSupportedException();
     }
 
@@ -192,7 +201,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
         int count = Count;
         for (int i = 0; i < count; i++)
         {
-            yield return new RowViewModel(session, RowIndexAtPageOffset(i));
+            yield return new RowViewModel(session, RowIndexAtPageOffset(i), selection);
         }
     }
 
@@ -217,7 +226,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session) : IList
         int count = Count;
         for (int i = 0; i < count; i++)
         {
-            array.SetValue(new RowViewModel(session, RowIndexAtPageOffset(i)), index + i);
+            array.SetValue(new RowViewModel(session, RowIndexAtPageOffset(i), selection), index + i);
         }
     }
 

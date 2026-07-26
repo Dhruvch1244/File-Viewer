@@ -22,7 +22,6 @@ public sealed class GridViewModel : ObservableObject
     public const int DefaultVisibleColumnCount = 20;
 
     private RowViewModel? _selectedRow;
-    private IReadOnlyList<RowViewModel> _selectedRows = [];
     private int _frozenColumnCount;
     private string _searchText = string.Empty;
     private string _columnSearchText = string.Empty;
@@ -32,7 +31,8 @@ public sealed class GridViewModel : ObservableObject
     public GridViewModel(FileViewerSession session)
     {
         Session = session;
-        Rows = new VirtualizingRowCollection(session);
+        Selection.Changed += OnSelectionChanged;
+        Rows = new VirtualizingRowCollection(session, Selection);
         Rows.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(PageIndex));
@@ -49,7 +49,7 @@ public sealed class GridViewModel : ObservableObject
         ClearSortCommand = RelayCommand.Create(ClearSort, () => CurrentSortColumn is not null);
         AddRowCommand = RelayCommand.Create(AddRow);
         DuplicateSelectedRowCommand = RelayCommand.Create(DuplicateSelectedRow, () => SelectedRow is not null);
-        DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => SelectedRows.Count > 0);
+        DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => Selection.Count > 0);
         UndoCommand = RelayCommand.Create(() => { Session.Overlay.Undo(); Rows.Invalidate(); }, () => Session.Overlay.CanUndo);
 
         ApplySearchCommand = RelayCommand.Create(() => Rows.ApplyFilter(SearchText));
@@ -89,12 +89,11 @@ public sealed class GridViewModel : ObservableObject
         set => SetField(ref _selectedRow, value);
     }
 
-    /// <summary>Populated from code-behind on DataGrid.SelectionChanged (DataGrid.SelectedItems isn't a bindable DependencyProperty).</summary>
-    public IReadOnlyList<RowViewModel> SelectedRows
-    {
-        get => _selectedRows;
-        set => SetField(ref _selectedRows, value);
-    }
+    /// <summary>Which rows are checked for bulk actions (Delete) — survives paging/sorting/filtering; see <see cref="RowSelectionState"/>.</summary>
+    public RowSelectionState Selection { get; } = new();
+
+    /// <summary>Bindable mirror of <see cref="RowSelectionState.Count"/> for the toolbar's "N selected" indicator.</summary>
+    public int SelectedCount => Selection.Count;
 
     /// <summary>Substring to search for across all columns. Applied on <see cref="ApplySearchCommand"/> (not per-keystroke — an arbitrary-column filter decodes every candidate row, so it's a deliberate action, not a live-as-you-type one).</summary>
     public string SearchText
@@ -193,16 +192,25 @@ public sealed class GridViewModel : ObservableObject
     }
 
     /// <summary>Selects every row matching the current search/column filters, across every page — not just the page currently rendered by the grid.</summary>
-    public void SelectAllRows()
-    {
-        SelectedRows = [.. Rows.GetAllRowIndices().Select(index => new RowViewModel(Session, index))];
-    }
+    public void SelectAllRows() => Selection.SelectAll(Rows.GetAllRowIndices());
 
-    public void ClearAllRowSelection() => SelectedRows = [];
+    public void ClearAllRowSelection() => Selection.Clear();
+
+    private void OnSelectionChanged()
+    {
+        // Bulk selection changes (select all / clear all / a checkbox toggle) don't change row
+        // membership or order, so a full Invalidate() (which also resets to page 0) would be
+        // overkill — RefreshCurrentPage() just forces the currently-visible checkboxes to re-read
+        // the new state.
+        Rows.RefreshCurrentPage();
+        OnPropertyChanged(nameof(SelectedCount));
+        CommandManager.InvalidateRequerySuggested();
+    }
 
     private void DeleteSelectedRows()
     {
-        Session.Overlay.BulkDelete(SelectedRows.Select(r => r.RowIndex).ToArray());
+        Session.Overlay.BulkDelete([.. Selection.SelectedRowIndices]);
+        Selection.Clear();
         Rows.Invalidate();
     }
 }

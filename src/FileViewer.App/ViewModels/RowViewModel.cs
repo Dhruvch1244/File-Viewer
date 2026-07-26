@@ -11,7 +11,7 @@ namespace FileViewer.App.ViewModels;
 /// indexer (bound in XAML as <c>[0]</c>, <c>[1]</c>, ...) so a fixed, compile-time-unknown set of
 /// DIF columns can still be edited in place through ordinary two-way `DataGridTextColumn` bindings.
 /// </summary>
-public sealed class RowViewModel(FileViewerSession session, long rowIndex) : INotifyPropertyChanged
+public sealed class RowViewModel(FileViewerSession session, long rowIndex, RowSelectionState selection) : INotifyPropertyChanged
 {
     private static readonly ResolvedRow EmptyRow = new(0, [], RowRenderState.Normal);
 
@@ -20,6 +20,13 @@ public sealed class RowViewModel(FileViewerSession session, long rowIndex) : INo
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public long RowIndex => rowIndex;
+
+    /// <summary>Whether this row is checked for bulk actions — backed by <see cref="RowSelectionState"/>, not this (short-lived, per-page) instance, so the check survives paging.</summary>
+    public bool IsSelected
+    {
+        get => selection.IsSelected(rowIndex);
+        set => selection.SetSelected(rowIndex, value);
+    }
 
     private ResolvedRow Resolved => _resolved ??= session.Resolve(rowIndex) ?? EmptyRow;
 
