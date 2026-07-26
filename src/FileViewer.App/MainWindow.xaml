@@ -1,0 +1,94 @@
+<Window x:Class="FileViewer.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:FileViewer.App"
+        xmlns:conv="clr-namespace:FileViewer.App.Converters"
+        xmlns:sysconv="clr-namespace:System.Windows.Controls;assembly=PresentationFramework"
+        mc:Ignorable="d"
+        Title="Bloomberg File Viewer" Height="700" Width="1200">
+    <Window.Resources>
+        <conv:RowRenderStateToBrushConverter x:Key="RowRenderStateToBrushConverter" />
+        <sysconv:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+    </Window.Resources>
+    <Grid>
+        <DockPanel>
+            <ToolBar DockPanel.Dock="Top">
+                <Button x:Name="OpenButton" Content="Open..." Click="OnOpenFileClick" />
+                <Separator />
+                <Button Content="Sort ID ↑" Command="{Binding Grid.SortByIdAscendingCommand}" />
+                <Button Content="Sort ID ↓" Command="{Binding Grid.SortByIdDescendingCommand}" />
+                <Button Content="Clear Sort" Command="{Binding Grid.ClearSortCommand}" />
+                <Separator />
+                <Button Content="Add Row" Command="{Binding Grid.AddRowCommand}" />
+                <Button Content="Duplicate" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
+                <Button Content="Delete" Command="{Binding Grid.DeleteSelectedRowsCommand}" />
+                <Button Content="Undo" Command="{Binding Grid.UndoCommand}" />
+                <Separator />
+                <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                <TextBox x:Name="SearchTextBox" Width="140" VerticalAlignment="Center"
+                         Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         KeyDown="OnSearchTextBoxKeyDown" />
+                <Button Content="Find" Command="{Binding Grid.ApplySearchCommand}" />
+                <Button Content="Clear" Command="{Binding Grid.ClearSearchCommand}" />
+                <Separator />
+                <Button x:Name="ColumnsButton" Content="Columns..." Click="OnColumnsButtonClick" />
+                <TextBlock Text="Frozen columns:" VerticalAlignment="Center" Margin="8,0,4,0" />
+                <TextBox Width="30" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                <Separator />
+                <Button x:Name="ExportButton" Content="Export..." Click="OnExportButtonClick" />
+            </ToolBar>
+
+            <StatusBar DockPanel.Dock="Bottom">
+                <StatusBarItem>
+                    <TextBlock Text="{Binding StatusMessage}" />
+                </StatusBarItem>
+                <StatusBarItem HorizontalAlignment="Right">
+                    <ProgressBar Width="200" Height="16" Minimum="0" Maximum="100"
+                                 Value="{Binding IndexingProgressPercent, Mode=OneWay}"
+                                 Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVisibilityConverter}}" />
+                </StatusBarItem>
+            </StatusBar>
+
+            <DataGrid x:Name="RowsDataGrid"
+                      ItemsSource="{Binding Grid.Rows}"
+                      SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
+                      SelectionChanged="OnGridSelectionChanged"
+                      SelectionMode="Extended"
+                      AutoGenerateColumns="False"
+                      CanUserAddRows="False"
+                      CanUserDeleteRows="False"
+                      CanUserResizeColumns="True"
+                      CanUserReorderColumns="True"
+                      EnableRowVirtualization="True"
+                      EnableColumnVirtualization="True"
+                      RowHeight="24"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel"
+                      AlternationCount="0"
+                      HeadersVisibility="Column">
+                <DataGrid.RowStyle>
+                    <Style TargetType="DataGridRow">
+                        <Setter Property="Background" Value="{Binding RenderState, Converter={StaticResource RowRenderStateToBrushConverter}}" />
+                    </Style>
+                </DataGrid.RowStyle>
+            </DataGrid>
+        </DockPanel>
+
+        <Popup x:Name="ColumnsPopup" PlacementTarget="{Binding ElementName=ColumnsButton}" Placement="Bottom" StaysOpen="False">
+            <Border Background="White" BorderBrush="Gray" BorderThickness="1" Padding="8" MaxHeight="400">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Grid.Columns}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsVisible}" Margin="2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+        </Popup>
+    </Grid>
+</Window>

@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/FileViewer.Benchmarks/FileViewer.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/FileViewer.App/FileViewer.App.csproj" />
+    <Project Path="src/FileViewer.Core/FileViewer.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FileViewer.Core.Tests/FileViewer.Core.Tests.csproj" />
+  </Folder>
+</Solution>
