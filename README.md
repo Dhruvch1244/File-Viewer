@@ -86,6 +86,25 @@ dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-wi
   or manually from the Actions tab (`Release` → `Run workflow`) against any branch, if you want a
   build without cutting a version tag.
 
+### Code signing (avoiding the "Unknown Publisher" warning)
+
+Release builds are signed via [SignPath](https://signpath.io)'s free code-signing program for
+open-source projects, so the downloaded exe isn't flagged by Windows SmartScreen. To enable it on
+a fork or after re-creating the repo:
+
+1. Sign up at [signpath.io](https://signpath.io), create an organization, and apply for the free
+   open-source plan for this project (this step needs manual approval from SignPath — it isn't
+   something a script can do for you).
+2. In the SignPath dashboard, create a **project** and a **signing policy** for release builds,
+   and generate an **API token** with permission to submit signing requests.
+3. In this repo's Settings → Secrets and variables → Actions, add:
+   - Secrets: `SIGNPATH_API_TOKEN`, `SIGNPATH_ORG_ID`
+   - Variables: `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`
+
+Once those are set, the next tag push signs the exe automatically. Until then, `release.yml` skips
+signing and ships an unsigned build — the workflow doesn't fail either way. Local builds from
+`build-release.ps1` are always unsigned; only CI-produced releases get signed.
+
 ## Benchmarks
 
 See [`benchmarks/FileViewer.Benchmarks/README.md`](benchmarks/FileViewer.Benchmarks/README.md) for

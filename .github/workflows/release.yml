@@ -4,6 +4,14 @@ name: Release
 # a downloadable zip. Runs automatically when a "v*.*.*" tag is pushed, or manually via the
 # Actions tab (Run workflow) against any branch — useful for producing a build without cutting an
 # official version tag.
+#
+# Code signing (SignPath): if the SIGNPATH_API_TOKEN secret is set, the built exe is submitted to
+# SignPath for signing before it's zipped, so the release download isn't flagged as "Unknown
+# Publisher" by Windows SmartScreen. Until those secrets/vars are configured (see README), the
+# signing steps are skipped and the release ships unsigned — the workflow still succeeds either
+# way. Required repo settings (Settings → Secrets and variables → Actions):
+#   Secrets:   SIGNPATH_API_TOKEN, SIGNPATH_ORG_ID
+#   Variables: SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG
 on:
   push:
     tags:
@@ -45,9 +53,40 @@ jobs:
       - name: Test before releasing
         run: dotnet test tests/FileViewer.Core.Tests/FileViewer.Core.Tests.csproj -c Release --no-restore
 
-      - name: Publish and zip release build
+      - name: Publish (unsigned)
+        run: dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-win-x64
+
+      - name: Upload unsigned executable for signing
+        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        id: upload_unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: publish/FileViewer-win-x64/FileViewer.App.exe
+          retention-days: 5
+
+      - name: Submit signing request to SignPath
+        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
+          organization-id: "${{ secrets.SIGNPATH_ORG_ID }}"
+          project-slug: "${{ vars.SIGNPATH_PROJECT_SLUG }}"
+          signing-policy-slug: "${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}"
+          github-artifact-id: "${{ steps.upload_unsigned.outputs.artifact-id }}"
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Replace unsigned exe with the signed one
+        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
         shell: pwsh
-        run: ./build-release.ps1
+        run: Copy-Item -Force "signed/FileViewer.App.exe" "publish/FileViewer-win-x64/FileViewer.App.exe"
+
+      - name: Zip release build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path "publish/FileViewer-win-x64/*" -DestinationPath "release/FileViewer-win-x64.zip" -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
