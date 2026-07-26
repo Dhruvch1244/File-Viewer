@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, "feature/**" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    # FileViewer.App targets net8.0-windows (WPF) and can only build on Windows.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: |
+          dotnet restore src/FileViewer.Core/FileViewer.Core.csproj
+          dotnet restore src/FileViewer.App/FileViewer.App.csproj
+          dotnet restore tests/FileViewer.Core.Tests/FileViewer.Core.Tests.csproj
+          dotnet restore benchmarks/FileViewer.Benchmarks/FileViewer.Benchmarks.csproj
+
+      - name: Build FileViewer.App (WPF)
+        run: dotnet build src/FileViewer.App/FileViewer.App.csproj -c Release --no-restore
+
+      - name: Build benchmarks (compile-only sanity check)
+        run: dotnet build benchmarks/FileViewer.Benchmarks/FileViewer.Benchmarks.csproj -c Release --no-restore
+
+      - name: Test FileViewer.Core
+        run: dotnet test tests/FileViewer.Core.Tests/FileViewer.Core.Tests.csproj -c Release --no-restore --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/FileViewer.Core.Tests/TestResults/test-results.trx

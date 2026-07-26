@@ -1,5 +1,7 @@
 # Bloomberg File Viewer
 
+[![CI](https://github.com/Dhruvch1244/File-Viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Dhruvch1244/File-Viewer/actions/workflows/ci.yml)
+
 A native Windows (.NET 8 / WPF) desktop app for opening, browsing, editing, and exporting
 Bloomberg DIF/GETDATA files — built to stay responsive on files up to 2 GB, with instant
 virtualized scrolling instead of loading the whole file into memory.
@@ -67,6 +69,22 @@ This produces a self-contained, single-file, ReadyToRun `win-x64` build of `File
 ```
 dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-win-x64
 ```
+
+## CI/CD
+
+- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request: builds `FileViewer.App`
+  and the benchmarks project, and runs the `FileViewer.Core` test suite on a Windows runner.
+- **Release** (`.github/workflows/release.yml`) builds and attaches a downloadable
+  `FileViewer-win-x64.zip` to a GitHub Release. It runs automatically when you push a tag matching
+  `v*.*.*`:
+
+  ```
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+
+  or manually from the Actions tab (`Release` → `Run workflow`) against any branch, if you want a
+  build without cutting a version tag.
 
 ## Benchmarks
 
