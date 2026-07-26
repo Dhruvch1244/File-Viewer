@@ -29,6 +29,12 @@ jobs:
   build-and-release:
     runs-on: windows-latest
 
+    # `if:` conditions can't reference the `secrets` context directly (GitHub Actions rejects it
+    # with "Unrecognized named-value: 'secrets'") — mirror it into `env` here so the signing steps
+    # below can gate on `env.SIGNPATH_API_TOKEN != ''` instead.
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,7 +63,7 @@ jobs:
         run: dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-win-x64
 
       - name: Upload unsigned executable for signing
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
         id: upload_unsigned
         uses: actions/upload-artifact@v4
         with:
@@ -66,7 +72,7 @@ jobs:
           retention-days: 5
 
       - name: Submit signing request to SignPath
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
         uses: signpath/github-action-submit-signing-request@v1
         with:
           api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
@@ -78,7 +84,7 @@ jobs:
           output-artifact-directory: signed
 
       - name: Replace unsigned exe with the signed one
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
         shell: pwsh
         run: Copy-Item -Force "signed/FileViewer.App.exe" "publish/FileViewer-win-x64/FileViewer.App.exe"
 
