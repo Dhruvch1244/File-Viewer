@@ -24,7 +24,7 @@
             <!-- Bound directly to the row's own IsSelected (backed by RowSelectionState, not the
                  DataGrid's native per-page selection) so bulk selection survives paging. -->
             <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                      IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                       AutomationProperties.Name="Select row" />
         </DataTemplate>
 
