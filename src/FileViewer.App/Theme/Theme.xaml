@@ -135,9 +135,15 @@
     </Style>
 
     <!-- Borderless variant used for inline DataGrid cell editing. -->
+    <!--
+        Zero padding here is deliberate: the DataGridCell that hosts this (in either display or
+        edit mode) already applies its own Padding="12,4". Giving the edit TextBox its own padding
+        on top of that stacked the two, so the caret/text visibly jumped further right/down the
+        instant you started editing a cell versus where the same text sat in display mode.
+    -->
     <Style x:Key="CellEditTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Padding" Value="12,4" />
+        <Setter Property="Padding" Value="0" />
         <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
         <Setter Property="Template">
             <Setter.Value>
@@ -275,6 +281,7 @@
         <Setter Property="FontSize" Value="11" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Padding" Value="12,0" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="DataGridColumnHeader">
@@ -291,7 +298,7 @@
                                            FontSize="9"
                                            Foreground="{StaticResource TextPrimaryBrush}"
                                            Visibility="Collapsed" />
-                                <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Left" />
+                                <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
                             </DockPanel>
                         </Border>
                         <Thumb x:Name="PART_LeftHeaderGripper" HorizontalAlignment="Left" Width="4" Background="Transparent" Cursor="SizeWE">
@@ -330,11 +337,12 @@
         <Setter Property="Padding" Value="12,4" />
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="DataGridCell">
                     <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
-                        <ContentPresenter VerticalAlignment="Center" />
+                        <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
                     </Border>
                 </ControlTemplate>
             </Setter.Value>

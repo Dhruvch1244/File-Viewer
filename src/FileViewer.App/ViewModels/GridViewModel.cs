@@ -18,6 +18,9 @@ namespace FileViewer.App.ViewModels;
 /// </summary>
 public sealed class GridViewModel : ObservableObject
 {
+    /// <summary>A file can have hundreds of columns; showing them all at once is unusable, so only the first this-many are visible by default — the rest are still reachable via the column chooser.</summary>
+    public const int DefaultVisibleColumnCount = 20;
+
     private RowViewModel? _selectedRow;
     private IReadOnlyList<RowViewModel> _selectedRows = [];
     private int _frozenColumnCount;
@@ -41,7 +44,7 @@ public sealed class GridViewModel : ObservableObject
         };
         ColumnNames = session.FileIndex.Header.ColumnNames;
         Columns = new ObservableCollection<GridColumnInfo>(
-            ColumnNames.Select((name, index) => new GridColumnInfo(name, index)));
+            ColumnNames.Select((name, index) => new GridColumnInfo(name, index) { IsVisible = index < DefaultVisibleColumnCount }));
 
         ClearSortCommand = RelayCommand.Create(ClearSort, () => CurrentSortColumn is not null);
         AddRowCommand = RelayCommand.Create(AddRow);

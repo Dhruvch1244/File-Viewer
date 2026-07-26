@@ -102,8 +102,10 @@ public partial class MainWindow : Window
         RowsDataGrid.Columns.Add(new DataGridTemplateColumn
         {
             HeaderTemplate = (DataTemplate)FindResource("SelectAllHeaderTemplate"),
+            HeaderStyle = (Style)FindResource("CenteredHeaderStyle"),
             CellTemplate = (DataTemplate)FindResource("SelectCheckBoxCellTemplate"),
-            Width = 36,
+            CellStyle = (Style)FindResource("CenteredCellStyle"),
+            Width = 40,
             CanUserResize = false,
             CanUserSort = false,
             CanUserReorder = false,
@@ -112,7 +114,8 @@ public partial class MainWindow : Window
         {
             Header = string.Empty,
             CellTemplate = (DataTemplate)FindResource("ViewButtonCellTemplate"),
-            Width = 68,
+            CellStyle = (Style)FindResource("CenteredCellStyle"),
+            Width = 64,
             CanUserResize = false,
             CanUserSort = false,
             CanUserReorder = false,
@@ -121,16 +124,20 @@ public partial class MainWindow : Window
         for (int i = 0; i < grid.ColumnNames.Count; i++)
         {
             string columnName = grid.ColumnNames[i];
+            GridColumnInfo definition = grid.Columns[i];
             var column = new DataGridTextColumn
             {
                 Header = columnName.ToUpperInvariant(),
                 SortMemberPath = columnName,
                 Binding = new Binding($"[{i}]") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.LostFocus },
                 EditingElementStyle = (Style)FindResource("CellEditTextBoxStyle"),
+                // Bug fix: this must be set here, at creation, not only inside the PropertyChanged
+                // handler below — otherwise every column starts Visible regardless of
+                // GridColumnInfo.IsVisible's initial value (e.g. the "only first 20 by default" rule).
+                Visibility = definition.IsVisible ? Visibility.Visible : Visibility.Collapsed,
             };
             RowsDataGrid.Columns.Add(column);
 
-            GridColumnInfo definition = grid.Columns[i];
             definition.PropertyChanged += (_, args) =>
             {
                 if (args.PropertyName == nameof(GridColumnInfo.IsVisible))

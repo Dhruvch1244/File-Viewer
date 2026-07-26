@@ -25,8 +25,21 @@
         </DataTemplate>
 
         <DataTemplate x:Key="ViewButtonCellTemplate">
-            <Button Content="View" Style="{StaticResource ToolbarButtonStyle}" Padding="8,2" FontSize="11" Click="OnViewRecordClick" />
+            <Button Content="View" Style="{StaticResource ToolbarButtonStyle}" Padding="8,2" FontSize="11"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" Click="OnViewRecordClick" />
         </DataTemplate>
+
+        <!-- The base DataGridCell/DataGridColumnHeader styles left-align their content (correct
+             for text columns); the select-checkbox and view-button columns need their content
+             centered instead, with tighter padding since they're narrow, fixed-width columns. -->
+        <Style x:Key="CenteredCellStyle" TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Padding" Value="4,4" />
+        </Style>
+        <Style x:Key="CenteredHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Padding" Value="4,0" />
+        </Style>
     </Window.Resources>
     <Grid>
         <DockPanel>
