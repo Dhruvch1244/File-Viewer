@@ -6,9 +6,9 @@
         xmlns:local="clr-namespace:FileViewer.App"
         xmlns:sysconv="clr-namespace:System.Windows.Controls;assembly=PresentationFramework"
         mc:Ignorable="d"
-        Title="Bloomberg File Viewer" Height="720" Width="1280"
-        Background="{StaticResource CanvasBrush}"
-        FontFamily="{StaticResource UiFontFamily}"
+        Title="Bloomberg File Viewer" Icon="Assets/AppIcon.ico" Height="720" Width="1280"
+        Background="{DynamicResource CanvasBrush}"
+        FontFamily="{DynamicResource UiFontFamily}"
         FontSize="13">
     <Window.Resources>
         <sysconv:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
@@ -40,8 +40,8 @@
                 <Viewbox Width="14" Height="14" Stretch="Uniform">
                     <Canvas Width="24" Height="24">
                         <Path Data="M1,12 C1,12 5,4 12,4 C19,4 23,12 23,12 C23,12 19,20 12,20 C5,20 1,12 1,12 Z"
-                              Stroke="{StaticResource TextPrimaryBrush}" StrokeThickness="1.8" Fill="Transparent" />
-                        <Ellipse Canvas.Left="9.25" Canvas.Top="9.25" Width="5.5" Height="5.5" Fill="{StaticResource TextPrimaryBrush}" />
+                              Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.8" Fill="Transparent" />
+                        <Ellipse Canvas.Left="9.25" Canvas.Top="9.25" Width="5.5" Height="5.5" Fill="{DynamicResource TextPrimaryBrush}" />
                     </Canvas>
                 </Viewbox>
             </Button>
@@ -73,13 +73,56 @@
         <DockPanel>
 
             <!-- ============================== Toolbar ============================== -->
-            <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
                 <DockPanel Margin="16,10">
                     <Button DockPanel.Dock="Right" x:Name="ExportButton" Content="Export" Style="{StaticResource PrimaryButtonStyle}" Click="OnExportButtonClick" Margin="12,0,0,0" />
                     <Button DockPanel.Dock="Right" x:Name="OpenButton" Content="Open File" Style="{StaticResource PrimaryButtonStyle}" Click="OnOpenFileClick" />
 
+                    <Button DockPanel.Dock="Right" Style="{StaticResource ToolbarButtonStyle}" Padding="8" Margin="0,0,12,0"
+                            Command="{Binding ToggleThemeCommand}" ToolTip="Toggle light/dark theme"
+                            AutomationProperties.Name="Toggle light/dark theme">
+                        <Viewbox Width="16" Height="16">
+                            <Grid Width="24" Height="24">
+                                <Canvas Width="24" Height="24">
+                                    <Canvas.Style>
+                                        <Style TargetType="Canvas">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDarkTheme}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Canvas.Style>
+                                    <Ellipse Canvas.Left="7" Canvas.Top="7" Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}" />
+                                    <Line X1="12" Y1="0" X2="12" Y2="4" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="12" Y1="20" X2="12" Y2="24" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="0" Y1="12" X2="4" Y2="12" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="20" Y1="12" X2="24" Y2="12" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="3.5" Y1="3.5" X2="6.3" Y2="6.3" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="17.7" Y1="17.7" X2="20.5" Y2="20.5" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="3.5" Y1="20.5" X2="6.3" Y2="17.7" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Line X1="17.7" Y1="6.3" X2="20.5" Y2="3.5" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                </Canvas>
+                                <Canvas Width="24" Height="24">
+                                    <Canvas.Style>
+                                        <Style TargetType="Canvas">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDarkTheme}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Canvas.Style>
+                                    <Path Data="M20,14.5 A9,9 0 1 1 9.5,4 A7,7 0 0 0 20,14.5 Z" Fill="{DynamicResource TextPrimaryBrush}" />
+                                </Canvas>
+                            </Grid>
+                        </Viewbox>
+                    </Button>
+
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border Background="{StaticResource CanvasBrush}" CornerRadius="6" Padding="2">
+                        <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="Add" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.AddRowCommand}" />
                                 <Button Content="Duplicate" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
@@ -88,7 +131,7 @@
                             </StackPanel>
                         </Border>
                         <TextBlock Text="{Binding Grid.SelectedRows.Count, StringFormat='{}{0} selected'}" VerticalAlignment="Center"
-                                   Margin="8,0,0,0" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}">
+                                   Margin="8,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Visible" />
@@ -101,21 +144,21 @@
                             </TextBlock.Style>
                         </TextBlock>
 
-                        <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
+                        <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="12,4" />
 
-                        <Border Background="{StaticResource CanvasBrush}" CornerRadius="6" Padding="2">
+                        <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
                                 <Button Content="Clear sort" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.ClearSortCommand}" />
                             </StackPanel>
                         </Border>
 
-                        <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
+                        <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="12,4" />
 
-                        <Border Background="{StaticResource CanvasBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="2">
+                        <Border Background="{DynamicResource CanvasBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Grid Width="200" VerticalAlignment="Center">
-                                    <TextBlock Text="Search all columns" Foreground="{StaticResource TextSecondaryBrush}" Margin="9,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock Text="Search all columns" Foreground="{DynamicResource TextSecondaryBrush}" Margin="9,0" VerticalAlignment="Center" IsHitTestVisible="False">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
                                                 <Setter Property="Visibility" Value="Collapsed" />
@@ -136,10 +179,10 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Width="1" Background="{StaticResource BorderBrush}" Margin="12,4" />
+                        <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="12,4" />
 
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="FROZEN COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="FROZEN COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBox Width="34" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" HorizontalContentAlignment="Center" />
                         </StackPanel>
                     </StackPanel>
@@ -147,9 +190,9 @@
             </Border>
 
             <!-- ============================== Status bar ============================= -->
-            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,10">
-                    <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
                     <ProgressBar Width="220" HorizontalAlignment="Right" VerticalAlignment="Center"
                                  Minimum="0" Maximum="100"
                                  Value="{Binding IndexingProgressPercent, Mode=OneWay}"
@@ -158,24 +201,26 @@
             </Border>
 
             <!-- ============================== Pagination bar ========================== -->
-            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,8">
                     <TextBlock Text="{Binding Grid.TotalRowCount, StringFormat='{}{0:N0} record(s)'}"
-                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Button Content="‹ Previous" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.PreviousPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
                         <TextBlock Text="{Binding Grid.PageLabel}" VerticalAlignment="Center" Margin="12,0"
-                                   FontSize="12" Foreground="{StaticResource TextPrimaryBrush}" />
+                                   FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" />
                         <Button Content="Next ›" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.NextPageCommand}" IsEnabled="{Binding Grid.CanGoToNextPage}" />
                     </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- ============================== Grid ==================================== -->
+            <!-- ============================== Grid / welcome screen ==================== -->
+            <Grid>
             <DataGrid x:Name="RowsDataGrid"
                       Margin="16"
+                      Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}"
                       ItemsSource="{Binding Grid.Rows}"
                       SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
                       SelectionChanged="OnGridSelectionChanged"
@@ -196,16 +241,110 @@
                       VirtualizingPanel.ScrollUnit="Pixel"
                       AlternationCount="0"
                       HeadersVisibility="Column" />
+
+            <!-- Welcome / tutorial screen — shown until a file is opened, so the app never presents an empty page with no orientation. -->
+            <Border x:Name="WelcomePanel" Background="{DynamicResource CanvasBrush}">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasFileOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Border.Triggers>
+                    <EventTrigger RoutedEvent="Border.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.35" />
+                                <ThicknessAnimation Storyboard.TargetProperty="Margin" From="0,16,0,0" To="0,0,0,0" Duration="0:0:0.35">
+                                    <ThicknessAnimation.EasingFunction>
+                                        <CubicEase EasingMode="EaseOut" />
+                                    </ThicknessAnimation.EasingFunction>
+                                </ThicknessAnimation>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Border.Triggers>
+                <Grid>
+                    <StackPanel MaxWidth="480" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Image Source="Assets/AppIcon.ico" Width="72" Height="72" HorizontalAlignment="Center" Margin="0,0,0,20"
+                               RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="Bloomberg File Viewer" FontSize="24" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Center" />
+                        <TextBlock Text="Open, browse, edit, and export Bloomberg DIF files — built for files up to 2 GB with instant, virtualized scrolling."
+                                   FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
+                                   TextAlignment="Center" Margin="0,10,0,28" />
+
+                        <StackPanel Margin="0,0,0,28">
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Instant virtualized scrolling through millions of rows without loading the whole file into memory"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Inline cell editing, add/duplicate/delete rows, and full undo history"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Excel-style per-column value filters, plus search across every column"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Export to DIF, CSV, TSV, or JSON with a live preview"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Light and dark themes — toggle from the button in the top-right corner"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                        </StackPanel>
+
+                        <Button Content="Open a File" Style="{StaticResource PrimaryButtonStyle}" Padding="20,10"
+                                HorizontalAlignment="Center" Click="OnOpenFileClick" />
+
+                        <TextBlock Text="Made by Dhruv Choudhary" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center" Margin="0,28,0,0" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+            </Grid>
         </DockPanel>
 
         <!-- ============================== Column chooser ============================ -->
-        <Popup x:Name="ColumnsPopup" PlacementTarget="{Binding ElementName=ColumnsButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
-            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" MaxHeight="420" Width="240" Margin="0,4,0,0">
+        <Popup x:Name="ColumnsPopup" PlacementTarget="{Binding ElementName=ColumnsButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" MaxHeight="420" Width="240" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" />
+                    <TextBlock DockPanel.Dock="Top" Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" />
                     <TextBox DockPanel.Dock="Top" Margin="0,0,0,8"
                              Text="{Binding Grid.ColumnSearchText, UpdateSourceTrigger=PropertyChanged}" />
                     <!-- Act on whatever the search box above currently shows — with no search text that's every column. -->
@@ -227,14 +366,14 @@
         </Popup>
 
         <!-- ============================== Column value filter (Excel-style) ========= -->
-        <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True">
-            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="220" MaxHeight="380" Margin="0,4,0,0">
+        <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="220" MaxHeight="380" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
                     <TextBlock x:Name="ColumnFilterTitle" DockPanel.Dock="Top" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextSecondaryBrush}" Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
                     <TextBox x:Name="ColumnFilterSearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="OnColumnFilterSearchChanged" />
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
                         <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick" />

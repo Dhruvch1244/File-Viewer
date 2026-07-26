@@ -1,7 +1,9 @@
 using System.IO;
 using System.Linq;
+using System.Windows.Input;
 using FileViewer.App.Common;
 using FileViewer.App.Logging;
+using FileViewer.App.Theme;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Indexing;
 using FileViewer.Core.Session;
@@ -16,12 +18,34 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _statusMessage = "No file open.";
     private double _indexingProgressPercent;
     private bool _isIndexing;
+    private bool _isDarkTheme = ThemeManager.Current == AppTheme.Dark;
+
+    public MainViewModel()
+    {
+        ToggleThemeCommand = RelayCommand.Create(() => ThemeManager.Toggle());
+        ThemeManager.ThemeChanged += theme => IsDarkTheme = theme == AppTheme.Dark;
+    }
 
     public GridViewModel? Grid
     {
         get => _grid;
-        private set => SetField(ref _grid, value);
+        private set
+        {
+            if (SetField(ref _grid, value)) OnPropertyChanged(nameof(HasFileOpen));
+        }
     }
+
+    /// <summary>Drives the welcome/tutorial screen vs. the data grid — welcome shows until a file is successfully opened.</summary>
+    public bool HasFileOpen => Grid is not null;
+
+    /// <summary>Mirrors <see cref="ThemeManager.Current"/> so the toolbar toggle button's icon/tooltip can bind to it directly.</summary>
+    public bool IsDarkTheme
+    {
+        get => _isDarkTheme;
+        private set => SetField(ref _isDarkTheme, value);
+    }
+
+    public ICommand ToggleThemeCommand { get; }
 
     public string StatusMessage
     {

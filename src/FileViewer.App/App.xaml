@@ -6,6 +6,7 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Theme/Colors.Light.xaml" />
                 <ResourceDictionary Source="Theme/Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

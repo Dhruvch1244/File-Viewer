@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using FileViewer.App.ViewModels;
 using FileViewer.App.Views;
@@ -49,6 +50,21 @@ public partial class MainWindow : Window
     }
 
     private void OnColumnsButtonClick(object sender, RoutedEventArgs e) => ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
+
+    /// <summary>Fades and drops the popup's content in on every open — Popup reuses its visual tree across opens, so a Loaded-based trigger would only ever fire once; Opened fires every time.</summary>
+    private void OnPopupOpened(object sender, EventArgs e)
+    {
+        if (sender is not Popup { Child: UIElement child }) return;
+
+        child.Opacity = 0;
+        var transform = new TranslateTransform(0, -6);
+        child.RenderTransform = transform;
+
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140));
+        var slide = new DoubleAnimation(-6, 0, TimeSpan.FromMilliseconds(140)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        child.BeginAnimation(UIElement.OpacityProperty, fade);
+        transform.BeginAnimation(TranslateTransform.YProperty, slide);
+    }
 
     private void OnSelectAllColumnsClick(object sender, RoutedEventArgs e) => SetVisibilityForFilteredColumns(isVisible: true);
 
