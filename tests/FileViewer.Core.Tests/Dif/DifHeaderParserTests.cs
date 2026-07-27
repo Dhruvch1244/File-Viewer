@@ -192,12 +192,13 @@ public class DifHeaderParserTests
     }
 
     [Fact]
-    public void ImplicitPrefixDetection_IsRobustToAShortFirstRow_UsesMostCommonOffsetAcrossSampledRows()
+    public void ImplicitPrefix_IsAppliedUnconditionally_RegardlessOfRowShapeOrFileSize()
     {
-        // A real-world variant of the same problem: the first data row is missing a trailing
-        // optional field (only 7 raw fields against 5 declared columns — delta of 2, not 3), which
-        // would fool a first-row-only peek into concluding there's no implicit prefix. Rows 2 and 3
-        // have the full 8 fields (delta of 3) and should win the vote.
+        // The security-ID|error-code|field-count triplet is a fixed property of the wire format,
+        // not something to infer from row contents — a small file (few rows, one of them short a
+        // trailing optional field) must get the same offset as a large, uniform one. This fixture's
+        // first row is missing a trailing field on purpose to prove the offset no longer depends on
+        // any row's actual shape.
         byte[] content = FixtureLoader.ReadBytes("futures_reference_implicit_prefix.dif");
 
         DifFileHeader header = DifHeaderParser.Parse(content);
@@ -221,6 +222,20 @@ public class DifHeaderParserTests
         Assert.Equal("BBG022YS3M48", fields[header.ColumnIndexOf("ID_BB_GLOBAL")]);
         Assert.Equal("AKRM7", fields[header.ColumnIndexOf("UNIQUE_ID_FUT_OPT")]);
         Assert.Equal("Comdty", fields[header.ColumnIndexOf("PARSEKYABLE_DES_SOURCE")]);
+    }
+
+    [Fact]
+    public void ImplicitPrefix_IsAppliedEvenWithZeroDataRows_NothingToPeekAt()
+    {
+        // No row-shape peek is possible here at all (empty data section) — the offset must still
+        // apply, because it's a property of the format/columns declared, not of any row's contents.
+        byte[] content = FixtureLoader.ReadBytes("getdata_empty_data_implicit_prefix.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "TICKER", "CPN", "MATURITY"], header.ColumnNames);
+        Assert.Equal(0, header.DeclaredDataRecords);
     }
 
     [Fact]
