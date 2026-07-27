@@ -212,8 +212,9 @@ public static class DifHeaderParser
     /// delimiter-separated values of every data row — regardless of what was declared between
     /// START-OF-FIELDS and END-OF-FIELDS, since those three are protocol plumbing, not requested
     /// fields. When a file's declared column list doesn't already account for them (its first
-    /// column isn't the conventional "_ID"), peek at the first data row: if it carries exactly three
-    /// more fields than there are declared columns, prepend
+    /// column isn't the conventional "_ID"), sample up to
+    /// <see cref="DifFormatOptions.ImplicitRecordPrefixSampleRows"/> leading data rows: if the most
+    /// common field-count-minus-declared-column-count across that sample is exactly three, prepend
     /// <see cref="DifFormatOptions.ImplicitRecordPrefixColumns"/> so every column index lines up with
     /// its row's actual field index everywhere else in the app (grid, sort, export, edit) without any
     /// further special-casing.
@@ -226,24 +227,39 @@ public static class DifHeaderParser
             return; // Already declared explicitly (or a file previously fixed up) — don't double-apply.
         }
 
-        int peekPos = dataStartPos;
-        if (!DifLineScanner.TryReadLine(headWindow, ref peekPos, out ReadOnlySpan<byte> firstDataLine))
-        {
-            return; // First data row falls outside the head window (or file has no data) — can't peek.
-        }
-
-        ReadOnlySpan<byte> trimmed = DifLineScanner.TrimTrailingCr(firstDataLine);
-        if (trimmed.Length == 0)
-        {
-            return;
-        }
-
         char delimiter = headerMetadata.TryGetValue(DifFormatOptions.DelimiterKey, out string? raw) && raw.Length == 1
             ? raw[0]
             : DifFormatOptions.DefaultDelimiter;
 
-        int actualFieldCount = DifRowParser.CountFields(trimmed, (byte)delimiter);
-        if (actualFieldCount == columnNames.Count + DifFormatOptions.ImplicitRecordPrefixColumns.Length)
+        var deltaFrequency = new Dictionary<int, int>();
+        int pos = dataStartPos;
+        int rowsSampled = 0;
+        while (rowsSampled < DifFormatOptions.ImplicitRecordPrefixSampleRows
+               && DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> line))
+        {
+            if (DifLineScanner.LineEqualsMarker(line, DifFormatOptions.DataEnd))
+            {
+                break; // Ran into the trailer within the head window — nothing past here is a data row.
+            }
+
+            ReadOnlySpan<byte> trimmed = DifLineScanner.TrimTrailingCr(line);
+            if (trimmed.Length == 0)
+            {
+                continue; // Blank line (e.g. right before END-OF-DATA) — not a real row, don't count it.
+            }
+
+            int delta = DifRowParser.CountFields(trimmed, (byte)delimiter) - columnNames.Count;
+            deltaFrequency[delta] = deltaFrequency.GetValueOrDefault(delta) + 1;
+            rowsSampled++;
+        }
+
+        if (deltaFrequency.Count == 0)
+        {
+            return; // No data rows fell within the head window (or the file has no data) — can't sample.
+        }
+
+        int modeDelta = deltaFrequency.MaxBy(kv => kv.Value).Key;
+        if (modeDelta == DifFormatOptions.ImplicitRecordPrefixColumns.Length)
         {
             columnNames.InsertRange(0, DifFormatOptions.ImplicitRecordPrefixColumns);
         }

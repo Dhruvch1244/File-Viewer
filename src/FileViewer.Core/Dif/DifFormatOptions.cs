@@ -42,6 +42,14 @@ public static class DifFormatOptions
     /// </summary>
     public static readonly string[] ImplicitRecordPrefixColumns = ["_ID", "_ERR", "_SIZE"];
 
+    /// <summary>
+    /// How many leading data rows <see cref="DifHeaderParser"/> samples when deciding whether
+    /// <see cref="ImplicitRecordPrefixColumns"/> applies. A single row isn't reliable on its own —
+    /// it can be short a trailing optional field (undercounting the offset) or carry stray trailing
+    /// data (overcounting it) — so several rows are checked and the most common offset wins.
+    /// </summary>
+    public const int ImplicitRecordPrefixSampleRows = 25;
+
     /// <summary>Used only if a file omits the DELIMITER header key, so the file still opens (PRS §8 Reliability).</summary>
     public const char DefaultDelimiter = '|';
 

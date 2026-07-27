@@ -192,6 +192,38 @@ public class DifHeaderParserTests
     }
 
     [Fact]
+    public void ImplicitPrefixDetection_IsRobustToAShortFirstRow_UsesMostCommonOffsetAcrossSampledRows()
+    {
+        // A real-world variant of the same problem: the first data row is missing a trailing
+        // optional field (only 7 raw fields against 5 declared columns — delta of 2, not 3), which
+        // would fool a first-row-only peek into concluding there's no implicit prefix. Rows 2 and 3
+        // have the full 8 fields (delta of 3) and should win the vote.
+        byte[] content = FixtureLoader.ReadBytes("futures_reference_implicit_prefix.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.DoesNotContain(header.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(
+            ["_ID", "_ERR", "_SIZE", "TICKER", "EXCH_CODE", "ID_BB_GLOBAL", "UNIQUE_ID_FUT_OPT", "PARSEKYABLE_DES_SOURCE"],
+            header.ColumnNames);
+
+        int pos = checked((int)header.DataStartOffset);
+        int end = checked((int)header.DataEndOffsetExclusive);
+        Assert.True(DifLineScanner.TryReadLine(content.AsSpan()[..end], ref pos, out _)); // skip the short first row
+        Assert.True(DifLineScanner.TryReadLine(content.AsSpan()[..end], ref pos, out ReadOnlySpan<byte> secondDataLine));
+        string[] fields = DifRowParser.ParseRow(secondDataLine, (byte)header.Delimiter, DifFormatOptions.TextEncoding);
+
+        Assert.Equal("AKRM7 Index", fields[header.ColumnIndexOf("_ID")]);
+        Assert.Equal("70", fields[header.ColumnIndexOf("_SIZE")]);
+        Assert.Equal("AKRM7", fields[header.ColumnIndexOf("TICKER")]);
+        Assert.Equal("KFE", fields[header.ColumnIndexOf("EXCH_CODE")]);
+        Assert.Equal("BBG022YS3M48", fields[header.ColumnIndexOf("ID_BB_GLOBAL")]);
+        Assert.Equal("AKRM7", fields[header.ColumnIndexOf("UNIQUE_ID_FUT_OPT")]);
+        Assert.Equal("Comdty", fields[header.ColumnIndexOf("PARSEKYABLE_DES_SOURCE")]);
+    }
+
+    [Fact]
     public void NotADifFile_IsInvalidWithClearDiagnostic()
     {
         byte[] content = FixtureLoader.ReadBytes("not_a_dif_file.bin");
