@@ -201,7 +201,7 @@ public static class DifHeaderParser
             return null;
         }
 
-        DetectAndApplyImplicitRecordPrefix(headWindow, pos, headerMetadata, columnNames);
+        ApplyImplicitRecordPrefix(columnNames);
 
         return (headerMetadata, columnNames, pos);
     }
@@ -209,44 +209,25 @@ public static class DifHeaderParser
     /// <summary>
     /// Bloomberg Data License "getdata" jobs (and similar) always emit a security identifier, an
     /// error/return code, and the count of fields actually returned as the first three
-    /// delimiter-separated values of every data row — regardless of what was declared between
+    /// delimiter-separated values of <b>every</b> data row — regardless of what was declared between
     /// START-OF-FIELDS and END-OF-FIELDS, since those three are protocol plumbing, not requested
-    /// fields. When a file's declared column list doesn't already account for them (its first
-    /// column isn't the conventional "_ID"), peek at the first data row: if it carries exactly three
-    /// more fields than there are declared columns, prepend
+    /// fields. This is a fixed structural property of the format, not something to infer from row
+    /// contents (peeking at sample rows to guess whether it applies is fragile — short/optional
+    /// trailing fields, files with only a handful of rows, etc. all make row-shape-based detection
+    /// unreliable). So: whenever the declared column list doesn't already account for the prefix
+    /// (its first column isn't the conventional "_ID"), unconditionally prepend
     /// <see cref="DifFormatOptions.ImplicitRecordPrefixColumns"/> so every column index lines up with
     /// its row's actual field index everywhere else in the app (grid, sort, export, edit) without any
     /// further special-casing.
     /// </summary>
-    private static void DetectAndApplyImplicitRecordPrefix(
-        ReadOnlySpan<byte> headWindow, int dataStartPos, Dictionary<string, string> headerMetadata, List<string> columnNames)
+    private static void ApplyImplicitRecordPrefix(List<string> columnNames)
     {
         if (columnNames.Count > 0 && columnNames[0] == DifFormatOptions.ImplicitRecordPrefixColumns[0])
         {
             return; // Already declared explicitly (or a file previously fixed up) — don't double-apply.
         }
 
-        int peekPos = dataStartPos;
-        if (!DifLineScanner.TryReadLine(headWindow, ref peekPos, out ReadOnlySpan<byte> firstDataLine))
-        {
-            return; // First data row falls outside the head window (or file has no data) — can't peek.
-        }
-
-        ReadOnlySpan<byte> trimmed = DifLineScanner.TrimTrailingCr(firstDataLine);
-        if (trimmed.Length == 0)
-        {
-            return;
-        }
-
-        char delimiter = headerMetadata.TryGetValue(DifFormatOptions.DelimiterKey, out string? raw) && raw.Length == 1
-            ? raw[0]
-            : DifFormatOptions.DefaultDelimiter;
-
-        int actualFieldCount = DifRowParser.CountFields(trimmed, (byte)delimiter);
-        if (actualFieldCount == columnNames.Count + DifFormatOptions.ImplicitRecordPrefixColumns.Length)
-        {
-            columnNames.InsertRange(0, DifFormatOptions.ImplicitRecordPrefixColumns);
-        }
+        columnNames.InsertRange(0, DifFormatOptions.ImplicitRecordPrefixColumns);
     }
 
     public static char ResolveDelimiter(IReadOnlyDictionary<string, string> headerMetadata, List<DifDiagnostic> diagnostics)

@@ -34,11 +34,12 @@ public static class DifFormatOptions
     public const string DataRecordsKey = "DATARECORDS";
 
     /// <summary>
-    /// Synthetic column names inserted ahead of the declared field list when a file's data rows
-    /// carry Bloomberg's implicit "getdata" record prefix (security identifier, error/return code,
-    /// and returned-field count) ahead of the actually-requested field values, without declaring
-    /// those three leading fields in START-OF-FIELDS. See
-    /// <see cref="DifHeaderParser.ParseHeaderAndFields"/> for the detection logic.
+    /// Synthetic column names unconditionally prepended to the declared field list when it doesn't
+    /// already start with "_ID": every Bloomberg "getdata"-style DIF data row carries a security
+    /// identifier, an error/return code, and the count of fields returned as its first three
+    /// delimiter-separated values, ahead of the actually-requested field values — regardless of
+    /// whether those three are declared in START-OF-FIELDS. This is a fixed property of the format,
+    /// not something inferred per file. See <see cref="DifHeaderParser.ParseHeaderAndFields"/>.
     /// </summary>
     public static readonly string[] ImplicitRecordPrefixColumns = ["_ID", "_ERR", "_SIZE"];
 

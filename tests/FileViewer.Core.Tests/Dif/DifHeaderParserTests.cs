@@ -192,6 +192,53 @@ public class DifHeaderParserTests
     }
 
     [Fact]
+    public void ImplicitPrefix_IsAppliedUnconditionally_RegardlessOfRowShapeOrFileSize()
+    {
+        // The security-ID|error-code|field-count triplet is a fixed property of the wire format,
+        // not something to infer from row contents — a small file (few rows, one of them short a
+        // trailing optional field) must get the same offset as a large, uniform one. This fixture's
+        // first row is missing a trailing field on purpose to prove the offset no longer depends on
+        // any row's actual shape.
+        byte[] content = FixtureLoader.ReadBytes("futures_reference_implicit_prefix.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.DoesNotContain(header.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(
+            ["_ID", "_ERR", "_SIZE", "TICKER", "EXCH_CODE", "ID_BB_GLOBAL", "UNIQUE_ID_FUT_OPT", "PARSEKYABLE_DES_SOURCE"],
+            header.ColumnNames);
+
+        int pos = checked((int)header.DataStartOffset);
+        int end = checked((int)header.DataEndOffsetExclusive);
+        Assert.True(DifLineScanner.TryReadLine(content.AsSpan()[..end], ref pos, out _)); // skip the short first row
+        Assert.True(DifLineScanner.TryReadLine(content.AsSpan()[..end], ref pos, out ReadOnlySpan<byte> secondDataLine));
+        string[] fields = DifRowParser.ParseRow(secondDataLine, (byte)header.Delimiter, DifFormatOptions.TextEncoding);
+
+        Assert.Equal("AKRM7 Index", fields[header.ColumnIndexOf("_ID")]);
+        Assert.Equal("70", fields[header.ColumnIndexOf("_SIZE")]);
+        Assert.Equal("AKRM7", fields[header.ColumnIndexOf("TICKER")]);
+        Assert.Equal("KFE", fields[header.ColumnIndexOf("EXCH_CODE")]);
+        Assert.Equal("BBG022YS3M48", fields[header.ColumnIndexOf("ID_BB_GLOBAL")]);
+        Assert.Equal("AKRM7", fields[header.ColumnIndexOf("UNIQUE_ID_FUT_OPT")]);
+        Assert.Equal("Comdty", fields[header.ColumnIndexOf("PARSEKYABLE_DES_SOURCE")]);
+    }
+
+    [Fact]
+    public void ImplicitPrefix_IsAppliedEvenWithZeroDataRows_NothingToPeekAt()
+    {
+        // No row-shape peek is possible here at all (empty data section) — the offset must still
+        // apply, because it's a property of the format/columns declared, not of any row's contents.
+        byte[] content = FixtureLoader.ReadBytes("getdata_empty_data_implicit_prefix.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "TICKER", "CPN", "MATURITY"], header.ColumnNames);
+        Assert.Equal(0, header.DeclaredDataRecords);
+    }
+
+    [Fact]
     public void NotADifFile_IsInvalidWithClearDiagnostic()
     {
         byte[] content = FixtureLoader.ReadBytes("not_a_dif_file.bin");
