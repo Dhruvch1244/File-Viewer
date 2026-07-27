@@ -151,22 +151,37 @@ public static class FileIndexer
         ex.HResult == ErrorNotEnoughMemoryHResult
         || ex.Message.Contains("not enough memory", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Rough size this app is built and tested against (see README/PRS) — used only to phrase <see cref="BuildInsufficientMemoryMessage"/> accurately, not to reject anything.</summary>
+    private const long TestedFileSizeBytes = 2L * 1024 * 1024 * 1024;
+
     /// <summary>
     /// Opening a file requires mapping it into one contiguous view up front (<see cref="IndexCore"/>
     /// reads/scans directly off that pointer for the file's entire lifetime — see the class remarks).
-    /// That succeeds comfortably at this app's tested ~2 GB target, but on a much larger file it can
-    /// fail if the machine doesn't have enough free memory/page-file space to back a view that size —
-    /// the raw OS message alone doesn't explain any of that to whoever hits it.
+    /// A file well beyond this app's tested ~2 GB target can fail here simply because the machine
+    /// doesn't have enough free memory/page-file space to back a view that size. But the same failure
+    /// can also hit a much smaller file — mapping is an all-or-nothing, whole-file commitment, so a
+    /// machine that's already low on memory/page-file space for unrelated reasons (other running
+    /// applications, a small fixed page file, etc.) can fail here too. The message has to say which
+    /// situation actually applies instead of always blaming file size — telling someone their 1.1 GB
+    /// file is "well beyond 2 GB" is simply wrong and sends them chasing the wrong fix.
     /// </summary>
     internal static string BuildInsufficientMemoryMessage(long fileLength, IOException originalError)
     {
-        double gb = fileLength / (1024.0 * 1024.0 * 1024.0);
-        return $"This file is about {gb:N1} GB. Opening it requires mapping the whole file into " +
-               "memory at once, and this machine could not satisfy that request " +
-               $"(Windows reported: \"{originalError.Message}\"). This is well beyond the ~2 GB file " +
-               "size Bloomberg File Viewer is built and tested for. Try increasing the Windows page " +
-               "file (virtual memory) size, closing other memory-heavy applications, or opening a " +
-               "smaller file.";
+        double fileGb = fileLength / (1024.0 * 1024.0 * 1024.0);
+        double availableGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024.0 * 1024.0);
+
+        string sizeContext = fileLength > TestedFileSizeBytes
+            ? "This is well beyond the ~2 GB file size Bloomberg File Viewer is built and tested for."
+            : "This is within the ~2 GB file size Bloomberg File Viewer is built and tested for, so " +
+              "the failure points to this machine's available memory (RAM + page file) being " +
+              "unusually constrained right now — not the file's size.";
+
+        return $"This file is about {fileGb:N1} GB, and this machine currently reports about " +
+               $"{availableGb:N1} GB of memory available to this process. Opening a file requires " +
+               "mapping the whole file into memory at once, and this machine could not satisfy that " +
+               $"request (Windows reported: \"{originalError.Message}\"). {sizeContext} Try increasing " +
+               "the Windows page file (virtual memory) size, closing other memory-heavy applications, " +
+               "or opening a smaller file.";
     }
 
     private static unsafe (UnmanagedArray<RowIndexEntry> RowIndex, UnmanagedArray<SortKey> SortKeys) ScanDataRegion(

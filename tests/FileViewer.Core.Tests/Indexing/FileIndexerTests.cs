@@ -180,7 +180,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildInsufficientMemoryMessage_ExplainsTheFileSizeAndOffersActionableRemedies()
+    public void BuildInsufficientMemoryMessage_ForAFileWellBeyondTarget_BlamesFileSize()
     {
         long twentyGigabytes = 20L * 1024 * 1024 * 1024;
         var original = new IOException("Not enough memory resources are available to process this command.");
@@ -188,8 +188,37 @@ public class FileIndexerTests
         string message = FileIndexer.BuildInsufficientMemoryMessage(twentyGigabytes, original);
 
         Assert.Contains("20.0 GB", message);
+        Assert.Contains("well beyond", message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("~2 GB", message);
         Assert.Contains(original.Message, message);
         Assert.Contains("page file", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildInsufficientMemoryMessage_ForAFileWithinTarget_BlamesTheMachineNotTheFile()
+    {
+        // Regression test: a 1.1 GB file hitting this failure previously still got told it was "well
+        // beyond the ~2 GB" target, which is simply false and points at the wrong cause. A file at or
+        // under the tested size must not be blamed for its size.
+        long pointOneGigabytes = (long)(1.1 * 1024 * 1024 * 1024);
+        var original = new IOException("Not enough memory resources are available to process this command.");
+
+        string message = FileIndexer.BuildInsufficientMemoryMessage(pointOneGigabytes, original);
+
+        Assert.Contains("1.1 GB", message);
+        Assert.DoesNotContain("well beyond", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("within the ~2 GB", message);
+        Assert.Contains("machine's available memory", message);
+        Assert.Contains(original.Message, message);
+    }
+
+    [Fact]
+    public void BuildInsufficientMemoryMessage_ReportsActualAvailableMemory()
+    {
+        var original = new IOException("Not enough memory resources are available to process this command.");
+
+        string message = FileIndexer.BuildInsufficientMemoryMessage(1024L * 1024 * 1024, original);
+
+        Assert.Contains("GB of memory available to this process", message);
     }
 }
