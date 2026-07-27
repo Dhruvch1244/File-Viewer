@@ -21,16 +21,33 @@ public static class DifLineScanner
         return idx < 0 ? -1 : start + idx;
     }
 
+    /// <summary>
+    /// True if <paramref name="line"/> is <paramref name="marker"/>, optionally followed by more
+    /// content on the same line (e.g. some real-world exports pack extra pipe-delimited fields onto
+    /// the marker line itself, such as "IMAHDR|BBGB0525-20260723-...|mfts-bwc|" rather than the
+    /// marker standing alone). To avoid false-matching a coincidentally longer token that merely
+    /// starts with the same letters (e.g. a column literally named "END-OF-FIELDS_X"), whatever
+    /// immediately follows the marker must not itself be a "word" character (letter, digit, or
+    /// underscore) — it has to be a real boundary (delimiter, punctuation, whitespace, or end of line).
+    /// </summary>
     public static bool LineEqualsMarker(ReadOnlySpan<byte> line, string marker)
     {
         line = TrimTrailingCr(line);
-        if (line.Length != marker.Length) return false;
+        if (line.Length < marker.Length) return false;
         for (int i = 0; i < marker.Length; i++)
         {
             if (line[i] != (byte)marker[i]) return false;
         }
-        return true;
+        if (line.Length == marker.Length) return true;
+
+        return !IsWordByte(line[marker.Length]);
     }
+
+    private static bool IsWordByte(byte b) =>
+        (b >= (byte)'A' && b <= (byte)'Z')
+        || (b >= (byte)'a' && b <= (byte)'z')
+        || (b >= (byte)'0' && b <= (byte)'9')
+        || b == (byte)'_';
 
     /// <summary>Parses a "KEY=VALUE" line. Returns false if the line has no '=' separator.</summary>
     public static bool TryParseKeyValue(ReadOnlySpan<byte> line, Encoding encoding, out string key, out string value)

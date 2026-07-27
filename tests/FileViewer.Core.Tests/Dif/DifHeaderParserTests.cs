@@ -195,6 +195,25 @@ public class DifHeaderParserTests
     }
 
     [Fact]
+    public void HeaderMarkerLine_WithTrailingPipeDelimitedContent_StillOpens()
+    {
+        // Some real-world exports pack extra fields onto the marker line itself instead of the
+        // marker standing alone — e.g. "IMAHDR|BBGB0525-20260723-...|mfts-bwc|". Previously this
+        // failed the exact-line-match check entirely, so the file never opened at all (it isn't a
+        // column-alignment issue like the earlier fixes — the header parse itself was rejecting
+        // the file before ever reaching START-OF-FIELDS).
+        byte[] content = FixtureLoader.ReadBytes("marker_line_with_trailing_content.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.DoesNotContain(header.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(DifFormatOptions.HeaderStartAlt, header.HeaderMarker);
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "TICKER", "CPN", "MATURITY"], header.ColumnNames);
+        Assert.Equal(3, CountDataRows(content, header));
+    }
+
+    [Fact]
     public void ImplicitPrefix_IsAppliedUnconditionally_RegardlessOfRowShapeOrFileSize()
     {
         // The security-ID|error-code|field-count triplet is a fixed property of the wire format,
