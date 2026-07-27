@@ -41,6 +41,26 @@ public class DifLineScannerTests
     }
 
     [Fact]
+    public void LineEqualsMarker_ToleratesTrailingContentAfterARealBoundary()
+    {
+        // Some real-world exports pack extra pipe-delimited fields onto the marker line itself
+        // (e.g. "IMAHDR|BBGB0525-20260723-...|mfts-bwc|") instead of the marker standing alone.
+        Assert.True(DifLineScanner.LineEqualsMarker(
+            Encoding.ASCII.GetBytes("IMAHDR|BBGB0525-20260723-195715S0000000000000000_001|mfts-bwc|"), "IMAHDR"));
+        Assert.True(DifLineScanner.LineEqualsMarker(Encoding.ASCII.GetBytes("START-OF-FIELDS,extra"), "START-OF-FIELDS"));
+        Assert.True(DifLineScanner.LineEqualsMarker(Encoding.ASCII.GetBytes("END-OF-FIELDS "), "END-OF-FIELDS"));
+    }
+
+    [Fact]
+    public void LineEqualsMarker_DoesNotMatchALongerTokenThatMerelyStartsWithTheMarker()
+    {
+        // "_" counts as a word character too — a column genuinely named "END-OF-FIELDS_X" (or any
+        // other identifier-like continuation) must not be mistaken for the END-OF-FIELDS marker.
+        Assert.False(DifLineScanner.LineEqualsMarker(Encoding.ASCII.GetBytes("END-OF-FIELDS_X"), "END-OF-FIELDS"));
+        Assert.False(DifLineScanner.LineEqualsMarker(Encoding.ASCII.GetBytes("START-OF-DATA2"), "START-OF-DATA"));
+    }
+
+    [Fact]
     public void TryParseKeyValue_SplitsOnFirstEquals()
     {
         bool ok = DifLineScanner.TryParseKeyValue(
