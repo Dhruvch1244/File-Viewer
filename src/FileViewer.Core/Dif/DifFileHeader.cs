@@ -33,6 +33,19 @@ public sealed class DifFileHeader
     public IReadOnlyDictionary<string, string> PostFieldsMetadata { get; init; } = new Dictionary<string, string>();
 
     public required IReadOnlyDictionary<string, string> TrailerMetadata { get; init; }
+
+    /// <summary>
+    /// The literal closing marker line the source file used — <see cref="DifFormatOptions.Trailer"/>
+    /// ("INATRL") or <see cref="DifFormatOptions.TrailerAlt"/> ("IMATRL") — mirroring
+    /// <see cref="HeaderMarker"/> at the other end of the file. Defaults to
+    /// <see cref="DifFormatOptions.Trailer"/> if the file had no trailer marker at all (trailer
+    /// metadata alone, with nothing to close it, is tolerated — see <see cref="DifHeaderParser.ParseTrailerAndDataEnd"/>).
+    /// </summary>
+    public string TrailerMarker { get; init; } = DifFormatOptions.Trailer;
+
+    /// <summary>Whether the source file had an <see cref="DifFormatOptions.FileEnd"/> marker line, mirroring <see cref="HasFileStartMarker"/> at the other end of the file.</summary>
+    public bool HasFileEndMarker { get; init; }
+
     public int? DeclaredDataRecords { get; init; }
 
     /// <summary>Byte offset of the first data row (immediately after the START-OF-DATA line).</summary>

@@ -97,6 +97,33 @@ public class ExportRoundTripTests
         Assert.Equal("Thu Jul 23 18:30:54 EDT 2026", reparsedHeader.PostFieldsMetadata["TIMESTARTED"]);
         Assert.Equal("Thu Jul 23 18:31:02 EDT 2026", reparsedHeader.TrailerMetadata["ENDTIME"]);
         Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // recomputed from the actual exported rows, not copied verbatim
+        Assert.Equal(DifFormatOptions.Trailer, reparsedHeader.TrailerMarker); // this fixture's trailer is plain INATRL, no END-OF-FILE
+        Assert.False(reparsedHeader.HasFileEndMarker);
+    }
+
+    [Fact]
+    public async Task Dif_RoundTrip_ForHeader_PreservesImatrlTrailerMarkerAndEndOfFileLine()
+    {
+        // real_world_trailer_before_end_of_file.dif uses the OTHER real trailer shape: IMATRL (not
+        // INATRL) as the closing marker, with an END-OF-FILE line right before it — both must
+        // survive a re-export the same way the header-side IMAHDR/START-OF-FILE pair already does.
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("real_world_trailer_before_end_of_file.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        using var stream = new MemoryStream();
+
+        ExportRunner.Export(stream, index, overlay, cache,
+            ExportRunner.FileOrderWithAddedRows(index, overlay),
+            DifExporter.ForHeader(index.Header));
+
+        byte[] exportedBytes = stream.ToArray();
+        DifFileHeader reparsedHeader = DifHeaderParser.Parse(exportedBytes);
+
+        Assert.True(reparsedHeader.IsValid);
+        Assert.Equal(DifFormatOptions.TrailerAlt, reparsedHeader.TrailerMarker);
+        Assert.True(reparsedHeader.HasFileEndMarker);
+        Assert.Equal("Thu Jul 23 19:08:48 EDT 2026", reparsedHeader.TrailerMetadata["TIMEFINISHED"]);
+        Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // recomputed from the actual exported rows
     }
 
     [Fact]

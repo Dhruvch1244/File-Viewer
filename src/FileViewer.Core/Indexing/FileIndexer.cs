@@ -78,7 +78,7 @@ public static class FileIndexer
             int tailWindowLength = checked((int)(fileLength - tailWindowStart));
             byte[] tailBuffer = new byte[tailWindowLength];
             RandomAccessReader.ReadExactly(fileHandle, tailBuffer, tailWindowStart);
-            (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive) =
+            (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive, string trailerMarker, bool hasFileEndMarker) =
                 DifHeaderParser.ParseTrailerAndDataEnd(tailBuffer, tailWindowStart, fileLength, diagnostics);
 
             int? declaredDataRecords = null;
@@ -97,6 +97,8 @@ public static class FileIndexer
                 ColumnNames = columnNames,
                 PostFieldsMetadata = postFieldsMetadata,
                 TrailerMetadata = trailerMetadata,
+                TrailerMarker = trailerMarker,
+                HasFileEndMarker = hasFileEndMarker,
                 DeclaredDataRecords = declaredDataRecords,
                 DataStartOffset = dataStartOffset,
                 DataEndOffsetExclusive = dataEndOffsetExclusive,
