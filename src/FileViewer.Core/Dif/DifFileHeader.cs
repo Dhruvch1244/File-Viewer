@@ -7,9 +7,31 @@ namespace FileViewer.Core.Dif;
 /// </summary>
 public sealed class DifFileHeader
 {
+    /// <summary>
+    /// The literal marker line the source file opened with — <see cref="DifFormatOptions.HeaderStart"/>
+    /// ("INAHDR") or <see cref="DifFormatOptions.HeaderStartAlt"/> ("IMAHDR"). Preserved so a DIF
+    /// export reproduces the same marker the file was opened with rather than always normalizing to
+    /// one spelling. Defaults to <see cref="DifFormatOptions.HeaderStart"/> for a header built other
+    /// than by parsing a real file (e.g. <see cref="DifHeaderParser.CreateInvalidHeader"/>).
+    /// </summary>
+    public string HeaderMarker { get; init; } = DifFormatOptions.HeaderStart;
+
+    /// <summary>Whether the source file had a <see cref="DifFormatOptions.FileStart"/> marker line right after the header marker.</summary>
+    public bool HasFileStartMarker { get; init; }
+
+    /// <summary>KEY=VALUE metadata lines between the header marker and START-OF-FIELDS (e.g. FIRMNAME, PROGRAMNAME, DELIMITER).</summary>
     public required IReadOnlyDictionary<string, string> HeaderMetadata { get; init; }
+
     public required char Delimiter { get; init; }
     public required IReadOnlyList<string> ColumnNames { get; init; }
+
+    /// <summary>
+    /// KEY=VALUE metadata lines some exports place between END-OF-FIELDS and START-OF-DATA (e.g.
+    /// TIMESTARTED) — kept separate from <see cref="HeaderMetadata"/> so a DIF export can reproduce
+    /// them in their original position rather than folding them into the header preamble.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> PostFieldsMetadata { get; init; } = new Dictionary<string, string>();
+
     public required IReadOnlyDictionary<string, string> TrailerMetadata { get; init; }
     public int? DeclaredDataRecords { get; init; }
 

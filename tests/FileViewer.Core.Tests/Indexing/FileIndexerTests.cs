@@ -150,4 +150,46 @@ public class FileIndexerTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => FileIndexer.IndexAsync(FixturePath("FixedIncomeAsia.dif"), cancellationToken: cts.Token));
     }
+
+    [Fact]
+    public void IsInsufficientMemoryError_MatchesTheWin32NotEnoughMemoryHResult()
+    {
+        // This is the exact HResult .NET assigns an IOException wrapping Win32 error 8
+        // (ERROR_NOT_ENOUGH_MEMORY) — the failure a huge file's memory-mapped view creation hits.
+        var ex = new IOException("some unrelated message") { HResult = unchecked((int)0x80070008) };
+
+        Assert.True(FileIndexer.IsInsufficientMemoryError(ex));
+    }
+
+    [Fact]
+    public void IsInsufficientMemoryError_AlsoMatchesByMessageWhenHResultDoesNotLineUp()
+    {
+        // Belt-and-braces path: some runtimes/platforms may not preserve the Win32 HResult exactly,
+        // so the same underlying OS message alone should still be recognized.
+        var ex = new IOException("Not enough memory resources are available to process this command.");
+
+        Assert.True(FileIndexer.IsInsufficientMemoryError(ex));
+    }
+
+    [Fact]
+    public void IsInsufficientMemoryError_DoesNotMatchUnrelatedIOExceptions()
+    {
+        var ex = new IOException("The process cannot access the file because it is being used by another process.");
+
+        Assert.False(FileIndexer.IsInsufficientMemoryError(ex));
+    }
+
+    [Fact]
+    public void BuildInsufficientMemoryMessage_ExplainsTheFileSizeAndOffersActionableRemedies()
+    {
+        long twentyGigabytes = 20L * 1024 * 1024 * 1024;
+        var original = new IOException("Not enough memory resources are available to process this command.");
+
+        string message = FileIndexer.BuildInsufficientMemoryMessage(twentyGigabytes, original);
+
+        Assert.Contains("20.0 GB", message);
+        Assert.Contains("~2 GB", message);
+        Assert.Contains(original.Message, message);
+        Assert.Contains("page file", message, StringComparison.OrdinalIgnoreCase);
+    }
 }
