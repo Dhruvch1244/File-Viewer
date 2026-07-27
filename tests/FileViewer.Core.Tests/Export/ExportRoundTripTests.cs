@@ -68,6 +68,38 @@ public class ExportRoundTripTests
     }
 
     [Fact]
+    public async Task Dif_RoundTrip_ForHeader_PreservesEverythingOutsideTheColumnGrid()
+    {
+        // bloomberg_getdata_implicit_prefix.dif carries exactly the "other stuff" that isn't a row
+        // value: an IMAHDR marker (not INAHDR), a START-OF-FILE line, pre-fields metadata
+        // (PROGRAMNAME/DATEFORMAT/ENCODING), post-fields metadata (TIMESTARTED, sitting between
+        // END-OF-FIELDS and START-OF-DATA), and a trailer with a second key (ENDTIME) beyond
+        // DATARECORDS. None of that is a column the grid displays, so it only survives an export if
+        // DifExporter.ForHeader is actually threading it through — this proves it round-trips intact.
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("bloomberg_getdata_implicit_prefix.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        using var stream = new MemoryStream();
+
+        ExportRunner.Export(stream, index, overlay, cache,
+            ExportRunner.FileOrderWithAddedRows(index, overlay),
+            DifExporter.ForHeader(index.Header));
+
+        byte[] exportedBytes = stream.ToArray();
+        DifFileHeader reparsedHeader = DifHeaderParser.Parse(exportedBytes);
+
+        Assert.True(reparsedHeader.IsValid);
+        Assert.Equal(DifFormatOptions.HeaderStartAlt, reparsedHeader.HeaderMarker);
+        Assert.True(reparsedHeader.HasFileStartMarker);
+        Assert.Equal("getdata", reparsedHeader.HeaderMetadata["PROGRAMNAME"]);
+        Assert.Equal("yyyymmdd", reparsedHeader.HeaderMetadata["DATEFORMAT"]);
+        Assert.Equal("UTF-8", reparsedHeader.HeaderMetadata["ENCODING"]);
+        Assert.Equal("Thu Jul 23 18:30:54 EDT 2026", reparsedHeader.PostFieldsMetadata["TIMESTARTED"]);
+        Assert.Equal("Thu Jul 23 18:31:02 EDT 2026", reparsedHeader.TrailerMetadata["ENDTIME"]);
+        Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // recomputed from the actual exported rows, not copied verbatim
+    }
+
+    [Fact]
     public async Task Csv_RoundTrip_QuotesFieldsContainingCommaOrQuote()
     {
         using Scenario scenario = await BuildMixedOverlayScenarioAsync();

@@ -170,9 +170,12 @@ public class DifHeaderParserTests
 
         Assert.True(header.IsValid);
         Assert.DoesNotContain(header.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(DifFormatOptions.HeaderStartAlt, header.HeaderMarker);
+        Assert.True(header.HasFileStartMarker);
         Assert.Equal(["_ID", "_ERR", "_SIZE", "TICKER", "CPN", "MATURITY"], header.ColumnNames);
         Assert.Equal("getdata", header.HeaderMetadata["PROGRAMNAME"]);
-        Assert.Equal("Thu Jul 23 18:30:54 EDT 2026", header.HeaderMetadata["TIMESTARTED"]);
+        Assert.False(header.HeaderMetadata.ContainsKey("TIMESTARTED")); // belongs after END-OF-FIELDS, not the header preamble
+        Assert.Equal("Thu Jul 23 18:30:54 EDT 2026", header.PostFieldsMetadata["TIMESTARTED"]);
         Assert.Equal(3, header.DeclaredDataRecords);
         Assert.Equal(3, CountDataRows(content, header));
 

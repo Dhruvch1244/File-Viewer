@@ -79,7 +79,8 @@ public static class FileIndexer
                 return invalidIndex;
             }
 
-            (Dictionary<string, string> headerMetadata, List<string> columnNames, long dataStartOffset) = forwardResult.Value;
+            (string headerMarker, bool hasFileStartMarker, Dictionary<string, string> headerMetadata,
+                List<string> columnNames, Dictionary<string, string> postFieldsMetadata, long dataStartOffset) = forwardResult.Value;
             char delimiter = DifHeaderParser.ResolveDelimiter(headerMetadata, diagnostics);
 
             long tailWindowStart = DifHeaderParser.ComputeTailWindowStart(dataStartOffset, fileLength);
@@ -97,9 +98,12 @@ public static class FileIndexer
 
             var header = new DifFileHeader
             {
+                HeaderMarker = headerMarker,
+                HasFileStartMarker = hasFileStartMarker,
                 HeaderMetadata = headerMetadata,
                 Delimiter = delimiter,
                 ColumnNames = columnNames,
+                PostFieldsMetadata = postFieldsMetadata,
                 TrailerMetadata = trailerMetadata,
                 DeclaredDataRecords = declaredDataRecords,
                 DataStartOffset = dataStartOffset,

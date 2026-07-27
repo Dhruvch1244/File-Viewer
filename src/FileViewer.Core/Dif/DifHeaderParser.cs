@@ -35,7 +35,8 @@ public static class DifHeaderParser
             return CreateInvalidHeader(diagnostics);
         }
 
-        (Dictionary<string, string> headerMetadata, List<string> columnNames, long dataStartOffset) = forwardResult.Value;
+        (string headerMarker, bool hasFileStartMarker, Dictionary<string, string> headerMetadata,
+            List<string> columnNames, Dictionary<string, string> postFieldsMetadata, long dataStartOffset) = forwardResult.Value;
 
         char delimiter = ResolveDelimiter(headerMetadata, diagnostics);
 
@@ -44,13 +45,17 @@ public static class DifHeaderParser
         (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive) =
             ParseTrailerAndDataEnd(tailWindow, tailWindowStart, content.Length, diagnostics);
 
-        return BuildHeader(headerMetadata, delimiter, columnNames, trailerMetadata, dataStartOffset, dataEndOffsetExclusive, diagnostics);
+        return BuildHeader(headerMarker, hasFileStartMarker, headerMetadata, delimiter, columnNames,
+            postFieldsMetadata, trailerMetadata, dataStartOffset, dataEndOffsetExclusive, diagnostics);
     }
 
     private static DifFileHeader BuildHeader(
+        string headerMarker,
+        bool hasFileStartMarker,
         Dictionary<string, string> headerMetadata,
         char delimiter,
         List<string> columnNames,
+        Dictionary<string, string> postFieldsMetadata,
         Dictionary<string, string> trailerMetadata,
         long dataStartOffset,
         long dataEndOffsetExclusive,
@@ -65,9 +70,12 @@ public static class DifHeaderParser
 
         return new DifFileHeader
         {
+            HeaderMarker = headerMarker,
+            HasFileStartMarker = hasFileStartMarker,
             HeaderMetadata = headerMetadata,
             Delimiter = delimiter,
             ColumnNames = columnNames,
+            PostFieldsMetadata = postFieldsMetadata,
             TrailerMetadata = trailerMetadata,
             DeclaredDataRecords = declaredDataRecords,
             DataStartOffset = dataStartOffset,
@@ -97,24 +105,36 @@ public static class DifHeaderParser
 
     /// <summary>
     /// Forward-scans <paramref name="headWindow"/> (must start at absolute file offset 0) for
-    /// INAHDR, header KEY=VALUE lines, START-OF-FIELDS, one column name per line, END-OF-FIELDS,
-    /// and finally START-OF-DATA. Returns null (with diagnostics explaining why) if any required
-    /// marker is missing — the file cannot be treated as DIF at all.
+    /// INAHDR/IMAHDR, header KEY=VALUE lines, START-OF-FIELDS, one column name per line,
+    /// END-OF-FIELDS, and finally START-OF-DATA. Returns null (with diagnostics explaining why) if
+    /// any required marker is missing — the file cannot be treated as DIF at all. Everything
+    /// returned here (which marker spelling, whether START-OF-FILE was present, and the pre-/post-
+    /// fields metadata split) exists so a later DIF export can reproduce the source file's structure
+    /// instead of silently normalizing or dropping it.
     /// </summary>
-    public static (Dictionary<string, string> HeaderMetadata, List<string> ColumnNames, long DataStartOffset)?
+    public static (string HeaderMarker, bool HasFileStartMarker, Dictionary<string, string> HeaderMetadata,
+        List<string> ColumnNames, Dictionary<string, string> PostFieldsMetadata, long DataStartOffset)?
         ParseHeaderAndFields(ReadOnlySpan<byte> headWindow, List<DifDiagnostic> diagnostics)
     {
         int pos = 0;
 
-        if (!DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> firstLine)
-            || !(DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.HeaderStart)
-                 || DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.HeaderStartAlt)))
+        if (!DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> firstLine))
+        {
+            diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Error,
+                $"File does not start with '{DifFormatOptions.HeaderStart}' or '{DifFormatOptions.HeaderStartAlt}'.", 0));
+            return null;
+        }
+        string headerMarker;
+        if (DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.HeaderStart)) headerMarker = DifFormatOptions.HeaderStart;
+        else if (DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.HeaderStartAlt)) headerMarker = DifFormatOptions.HeaderStartAlt;
+        else
         {
             diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Error,
                 $"File does not start with '{DifFormatOptions.HeaderStart}' or '{DifFormatOptions.HeaderStartAlt}'.", 0));
             return null;
         }
 
+        bool hasFileStartMarker = false;
         var headerMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         bool foundFieldsStart = false;
         while (DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> line))
@@ -126,6 +146,7 @@ public static class DifHeaderParser
             }
             if (DifLineScanner.LineEqualsMarker(line, DifFormatOptions.FileStart))
             {
+                hasFileStartMarker = true;
                 continue;
             }
             if (DifLineScanner.TryParseKeyValue(line, DifFormatOptions.TextEncoding, out string key, out string value))
@@ -175,7 +196,10 @@ public static class DifHeaderParser
 
         // Some exports insert extra KEY=VALUE metadata (e.g. TIMESTARTED=...) between END-OF-FIELDS
         // and START-OF-DATA rather than having START-OF-DATA follow immediately. Skip over those the
-        // same way the header preamble does, instead of requiring exact adjacency.
+        // same way the header preamble does, instead of requiring exact adjacency. Kept in a
+        // separate dictionary from the header preamble's so a DIF export can put them back exactly
+        // where they came from (after END-OF-FIELDS, not folded into the header before START-OF-FIELDS).
+        var postFieldsMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         bool foundDataStart = false;
         while (DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> line))
         {
@@ -186,7 +210,7 @@ public static class DifHeaderParser
             }
             if (DifLineScanner.TryParseKeyValue(line, DifFormatOptions.TextEncoding, out string key, out string value))
             {
-                headerMetadata[key] = value;
+                postFieldsMetadata[key] = value;
             }
             else if (DifLineScanner.TrimTrailingCr(line).Length > 0)
             {
@@ -203,7 +227,7 @@ public static class DifHeaderParser
 
         ApplyImplicitRecordPrefix(columnNames);
 
-        return (headerMetadata, columnNames, pos);
+        return (headerMarker, hasFileStartMarker, headerMetadata, columnNames, postFieldsMetadata, pos);
     }
 
     /// <summary>

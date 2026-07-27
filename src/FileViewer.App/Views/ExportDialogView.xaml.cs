@@ -7,11 +7,20 @@ using Microsoft.Win32;
 
 namespace FileViewer.App.Views;
 
-/// <summary>Format picker + live 2-row preview, reusing <see cref="FileViewerSession.GeneratePreview"/> so the preview can never drift from what the real export (also via the session) produces.</summary>
+/// <summary>
+/// Format picker + live 2-row preview, reusing <see cref="FileViewerSession.GeneratePreview"/> so
+/// the preview can never drift from what the real export (also via the session) produces. Also
+/// suggests a Bloomberg-style output file name — "{baseName}.{formatToken}.{yyyyMMdd}" (see
+/// <see cref="ExportFileNaming"/>) — built from the source file's name and a user-editable date, so
+/// the default <see cref="SaveFileDialog"/> file name matches how these files are actually named in
+/// the wild instead of a plain "*.csv" with no date.
+/// </summary>
 public partial class ExportDialogView : Window, INotifyPropertyChanged
 {
     private readonly FileViewerSession _session;
     private ExportFormatKind _format = ExportFormatKind.Csv;
+    private string _difFormatToken = "dif";
+    private DateTime _selectedDate = DateTime.Today;
     private string _previewText = string.Empty;
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -29,6 +38,28 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
     public bool IsTsvSelected { get => _format == ExportFormatKind.Tsv; set { if (value) SetFormat(ExportFormatKind.Tsv); } }
     public bool IsJsonSelected { get => _format == ExportFormatKind.Json; set { if (value) SetFormat(ExportFormatKind.Json); } }
 
+    /// <summary>Only DIF has a real-world ".dif" vs ".out" ambiguity (both are genuine Bloomberg conventions); the other formats have one obvious token (csv/tsv/json), so this only matters — and is only shown — while DIF is selected.</summary>
+    public bool ShowDifFormatTokenChoice => IsDifSelected;
+
+    public bool IsDifDotDifSelected { get => _difFormatToken == "dif"; set { if (value) SetDifFormatToken("dif"); } }
+    public bool IsDifDotOutSelected { get => _difFormatToken == "out"; set { if (value) SetDifFormatToken("out"); } }
+
+    /// <summary>Date embedded in the suggested output file name — defaults to today, but the user can pick any date (e.g. to match the business date the data represents).</summary>
+    public DateTime? SelectedDate
+    {
+        get => _selectedDate;
+        set
+        {
+            _selectedDate = value ?? DateTime.Today;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedDate)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SuggestedFileName)));
+        }
+    }
+
+    /// <summary>"{baseName}.{formatToken}.{yyyyMMdd}" — what gets pre-filled into the save dialog; shown in the dialog itself too so the user sees exactly what will be saved before Export is even clicked.</summary>
+    public string SuggestedFileName => ExportFileNaming.BuildFileName(
+        _session.FileIndex.FilePath, CurrentFormatToken(), DateOnly.FromDateTime(_selectedDate));
+
     public string PreviewText
     {
         get => _previewText;
@@ -42,12 +73,33 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
     private void SetFormat(ExportFormatKind format)
     {
         _format = format;
-        foreach (string name in new[] { nameof(IsDifSelected), nameof(IsCsvSelected), nameof(IsTsvSelected), nameof(IsJsonSelected) })
+        foreach (string name in new[]
+                 {
+                     nameof(IsDifSelected), nameof(IsCsvSelected), nameof(IsTsvSelected), nameof(IsJsonSelected),
+                     nameof(ShowDifFormatTokenChoice), nameof(SuggestedFileName),
+                 })
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         }
         RefreshPreview();
     }
+
+    private void SetDifFormatToken(string token)
+    {
+        _difFormatToken = token;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDifDotDifSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDifDotOutSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SuggestedFileName)));
+    }
+
+    private string CurrentFormatToken() => _format switch
+    {
+        ExportFormatKind.Dif => _difFormatToken,
+        ExportFormatKind.Csv => "csv",
+        ExportFormatKind.Tsv => "tsv",
+        ExportFormatKind.Json => "json",
+        _ => throw new InvalidOperationException($"Unhandled export format '{_format}'."),
+    };
 
     private void RefreshPreview()
     {
@@ -57,7 +109,7 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
 
     private IRowExporter CreateExporter(ExportFormatKind format) => format switch
     {
-        ExportFormatKind.Dif => new DifExporter(_session.FileIndex.Header.Delimiter, _session.FileIndex.Header.HeaderMetadata),
+        ExportFormatKind.Dif => DifExporter.ForHeader(_session.FileIndex.Header),
         ExportFormatKind.Csv => new CsvExporter(),
         ExportFormatKind.Tsv => new TsvExporter(),
         ExportFormatKind.Json => new JsonExporter(),
@@ -68,12 +120,18 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
     {
         var dialog = new SaveFileDialog
         {
+            // AddExtension off: the suggested name already ends in ".{formatToken}.{yyyyMMdd}" (an
+            // 8-digit "extension"), and Windows would otherwise try to tack the filter's default
+            // extension on after that, e.g. "...20260727.dif".
+            AddExtension = false,
+            FileName = SuggestedFileName,
+            InitialDirectory = Path.GetDirectoryName(_session.FileIndex.FilePath) ?? string.Empty,
             Filter = _format switch
             {
-                ExportFormatKind.Dif => "DIF files (*.dif)|*.dif",
-                ExportFormatKind.Csv => "CSV files (*.csv)|*.csv",
-                ExportFormatKind.Tsv => "TSV files (*.tsv)|*.tsv",
-                ExportFormatKind.Json => "JSON files (*.json)|*.json",
+                ExportFormatKind.Dif => "DIF export (*.dif.*, *.out.*)|*.dif.*;*.out.*|All files (*.*)|*.*",
+                ExportFormatKind.Csv => "CSV export (*.csv.*)|*.csv.*|All files (*.*)|*.*",
+                ExportFormatKind.Tsv => "TSV export (*.tsv.*)|*.tsv.*|All files (*.*)|*.*",
+                ExportFormatKind.Json => "JSON export (*.json.*)|*.json.*|All files (*.*)|*.*",
                 _ => "All files (*.*)|*.*",
             },
         };

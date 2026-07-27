@@ -3,18 +3,45 @@ using FileViewer.Core.Overlay;
 
 namespace FileViewer.Core.Export;
 
-/// <summary>Writes the same DIF grammar <see cref="DifHeaderParser"/> reads, so round-tripping an export back through the parser reproduces the resolved rows.</summary>
-public sealed class DifExporter(char delimiter, IReadOnlyDictionary<string, string>? headerMetadata = null) : IRowExporter
+/// <summary>
+/// Writes the same DIF grammar <see cref="DifHeaderParser"/> reads, so round-tripping an export
+/// back through the parser reproduces the resolved rows. When constructed <see cref="ForHeader"/> a
+/// source <see cref="DifFileHeader"/>, also reproduces everything that header parsed but isn't
+/// itself a column value — the header marker spelling (INAHDR/IMAHDR), the START-OF-FILE marker,
+/// pre-fields metadata (FIRMNAME, PROGRAMNAME, ...), post-fields metadata (TIMESTARTED, ...), and
+/// trailer metadata beyond DATARECORDS — so an export of an edited file keeps looking like the
+/// source file it came from instead of shedding everything the row grid doesn't display.
+/// </summary>
+public sealed class DifExporter(
+    char delimiter,
+    IReadOnlyDictionary<string, string>? headerMetadata = null,
+    IReadOnlyDictionary<string, string>? postFieldsMetadata = null,
+    IReadOnlyDictionary<string, string>? trailerMetadata = null,
+    string headerMarker = DifFormatOptions.HeaderStart,
+    bool includeFileStartMarker = false) : IRowExporter
 {
     private StreamWriter? _writer;
     private int _rowCount;
+
+    /// <summary>Convenience factory that carries every preservable piece of a parsed header straight into the exporter, so a "re-export what I opened" path never has to enumerate them by hand.</summary>
+    public static DifExporter ForHeader(DifFileHeader header) => new(
+        header.Delimiter,
+        header.HeaderMetadata,
+        header.PostFieldsMetadata,
+        header.TrailerMetadata,
+        header.HeaderMarker,
+        header.HasFileStartMarker);
 
     public void Begin(Stream stream, IReadOnlyList<string> columnNames)
     {
         _rowCount = 0;
         _writer = new StreamWriter(stream, DifFormatOptions.TextEncoding, leaveOpen: true) { NewLine = "\n" };
 
-        _writer.WriteLine(DifFormatOptions.HeaderStart);
+        _writer.WriteLine(headerMarker);
+        if (includeFileStartMarker)
+        {
+            _writer.WriteLine(DifFormatOptions.FileStart);
+        }
         _writer.WriteLine($"{DifFormatOptions.DelimiterKey}={delimiter}");
         if (headerMetadata is not null)
         {
@@ -30,6 +57,13 @@ public sealed class DifExporter(char delimiter, IReadOnlyDictionary<string, stri
             _writer.WriteLine(name);
         }
         _writer.WriteLine(DifFormatOptions.FieldsEnd);
+        if (postFieldsMetadata is not null)
+        {
+            foreach ((string key, string value) in postFieldsMetadata)
+            {
+                _writer.WriteLine($"{key}={value}");
+            }
+        }
         _writer.WriteLine(DifFormatOptions.DataStart);
     }
 
@@ -43,7 +77,24 @@ public sealed class DifExporter(char delimiter, IReadOnlyDictionary<string, stri
     {
         _writer!.WriteLine(DifFormatOptions.DataEnd);
         _writer.WriteLine(DifFormatOptions.Trailer);
-        _writer.WriteLine($"{DifFormatOptions.DataRecordsKey}={_rowCount}");
+
+        // DATARECORDS must reflect what was actually written (edits can add/remove rows), so it's
+        // always recomputed here rather than trusting the source file's original value — but every
+        // *other* trailer key the source file had is still reproduced, in its original position.
+        bool wroteDataRecords = false;
+        if (trailerMetadata is not null)
+        {
+            foreach ((string key, string value) in trailerMetadata)
+            {
+                string outValue = key == DifFormatOptions.DataRecordsKey ? _rowCount.ToString() : value;
+                _writer.WriteLine($"{key}={outValue}");
+                wroteDataRecords |= key == DifFormatOptions.DataRecordsKey;
+            }
+        }
+        if (!wroteDataRecords)
+        {
+            _writer.WriteLine($"{DifFormatOptions.DataRecordsKey}={_rowCount}");
+        }
         _writer.Flush();
     }
 
