@@ -157,6 +157,41 @@ public class DifHeaderParserTests
     }
 
     [Fact]
+    public void ImahdrGetdataFile_WithImplicitIdErrSizePrefix_ParsesAndSynthesizesLeadingColumns()
+    {
+        // Mirrors a real Bloomberg Data License "getdata" export: header marker is IMAHDR (not
+        // INAHDR), a START-OF-FILE marker line precedes the KEY=VALUE metadata, a TIMESTARTED=...
+        // line sits between END-OF-FIELDS and START-OF-DATA, and every data row carries an implicit
+        // security-ID|error-code|field-count triplet ahead of the declared TICKER/CPN/MATURITY
+        // values without those three being declared in START-OF-FIELDS.
+        byte[] content = FixtureLoader.ReadBytes("bloomberg_getdata_implicit_prefix.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.DoesNotContain(header.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "TICKER", "CPN", "MATURITY"], header.ColumnNames);
+        Assert.Equal("getdata", header.HeaderMetadata["PROGRAMNAME"]);
+        Assert.Equal("Thu Jul 23 18:30:54 EDT 2026", header.HeaderMetadata["TIMESTARTED"]);
+        Assert.Equal(3, header.DeclaredDataRecords);
+        Assert.Equal(3, CountDataRows(content, header));
+
+        int pos = checked((int)header.DataStartOffset);
+        int end = checked((int)header.DataEndOffsetExclusive);
+        Assert.True(DifLineScanner.TryReadLine(content.AsSpan()[..end], ref pos, out ReadOnlySpan<byte> firstDataLine));
+        string[] fields = DifRowParser.ParseRow(firstDataLine, (byte)header.Delimiter, DifFormatOptions.TextEncoding);
+
+        // With the synthesized leading columns, every column index now lines up with its row's
+        // actual field index — TICKER (column 3) reads "PRETSL", not the security ID.
+        Assert.Equal("EC3478608 Corp", fields[header.ColumnIndexOf("_ID")]);
+        Assert.Equal("0", fields[header.ColumnIndexOf("_ERR")]);
+        Assert.Equal("3", fields[header.ColumnIndexOf("_SIZE")]);
+        Assert.Equal("PRETSL", fields[header.ColumnIndexOf("TICKER")]);
+        Assert.Equal("9.550000", fields[header.ColumnIndexOf("CPN")]);
+        Assert.Equal("20310301", fields[header.ColumnIndexOf("MATURITY")]);
+    }
+
+    [Fact]
     public void NotADifFile_IsInvalidWithClearDiagnostic()
     {
         byte[] content = FixtureLoader.ReadBytes("not_a_dif_file.bin");
