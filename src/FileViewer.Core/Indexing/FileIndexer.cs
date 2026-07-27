@@ -1,4 +1,4 @@
-using System.IO.MemoryMappedFiles;
+using Microsoft.Win32.SafeHandles;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Native;
 using FileViewer.Core.Sorting;
@@ -6,21 +6,37 @@ using FileViewer.Core.Sorting;
 namespace FileViewer.Core.Indexing;
 
 /// <summary>
-/// Opens a DIF file over a read-only memory mapping and builds its <see cref="FileIndex"/>.
+/// Opens a DIF file over a read-only file handle and builds its <see cref="FileIndex"/>. Never maps
+/// the whole file into memory at once — see <see cref="FileIndex"/>'s remarks for why that matters.
 ///
 /// Phase A (sequential, cheap): locates the header/field/trailer markers via
-/// <see cref="DifHeaderParser"/> without touching the bulk data-row region.
+/// <see cref="DifHeaderParser"/> by reading two small bounded windows (a head window and a tail
+/// window), without touching the bulk data-row region.
 ///
 /// Phase B (parallel): scans only the <c>[DataStartOffset, DataEndOffsetExclusive)</c> byte range
-/// in contiguous, line-aligned chunks — one <see cref="Task"/> per chunk — extracting each row's
-/// offset/length and sort key into per-chunk unmanaged buffers, then merges those buffers into the
-/// shared <see cref="UnmanagedArray{T}"/>s in chunk order (which, since chunks are contiguous and
-/// ordered, reproduces file order without any offset-based re-sort).
+/// in contiguous, line-aligned chunks — one <see cref="Task"/> per chunk, each chunk capped at
+/// <see cref="MaxChunkReadBytes"/> so no single read (and therefore no single buffer) scales with
+/// file size — extracting each row's offset/length and sort key into per-chunk unmanaged buffers,
+/// then merges those buffers into the shared <see cref="UnmanagedArray{T}"/>s in chunk order (which,
+/// since chunks are contiguous and ordered, reproduces file order without any offset-based re-sort).
 /// </summary>
 public static class FileIndexer
 {
     /// <summary>Minimum bytes per chunk before Phase B bothers splitting further — avoids pointless parallelism overhead on small files.</summary>
-    private const long MinChunkBytes = 4 * 1024 * 1024;
+    internal const long MinChunkBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// Upper bound on how much any single chunk (and therefore any single read buffer) is allowed
+    /// to be, regardless of file size or core count — the reason Phase B never needs anywhere close
+    /// to "the whole file" in memory at once. A big file with few cores just becomes more, smaller
+    /// chunks instead of fewer, larger ones; <see cref="Environment.ProcessorCount"/> already bounds
+    /// how many run concurrently, so peak Phase B memory stays roughly ProcessorCount × this value
+    /// no matter how large the file is.
+    /// </summary>
+    internal const int MaxChunkReadBytes = 64 * 1024 * 1024;
+
+    /// <summary>Size of the bounded look-ahead window used to find the next line boundary near a candidate chunk split point — comfortably larger than any real DIF line.</summary>
+    private const int LineBoundarySearchWindowBytes = 1024 * 1024;
 
     private const long ProgressReportRowInterval = 50_000;
 
@@ -30,50 +46,25 @@ public static class FileIndexer
         return Task.Run(() => IndexCore(path, progress, cancellationToken), cancellationToken);
     }
 
-    private static unsafe FileIndex IndexCore(string path, IProgress<IndexingProgress>? progress, CancellationToken cancellationToken)
+    private static FileIndex IndexCore(string path, IProgress<IndexingProgress>? progress, CancellationToken cancellationToken)
     {
         long fileLength = new FileInfo(path).Length;
+        SafeFileHandle fileHandle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.RandomAccess);
 
-        MemoryMappedFile mappedFile;
-        try
-        {
-            mappedFile = MemoryMappedFile.CreateFromFile(path, FileMode.Open, mapName: null, capacity: 0, MemoryMappedFileAccess.Read);
-        }
-        catch (IOException ex) when (IsInsufficientMemoryError(ex))
-        {
-            throw new IOException(BuildInsufficientMemoryMessage(fileLength, ex), ex);
-        }
-
-        MemoryMappedViewAccessor? accessor = null;
-        byte* pointer = null;
         bool ownershipTransferred = false;
         try
         {
-            try
-            {
-                accessor = fileLength == 0
-                    ? mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read)
-                    : mappedFile.CreateViewAccessor(0, fileLength, MemoryMappedFileAccess.Read);
-            }
-            catch (IOException ex) when (IsInsufficientMemoryError(ex))
-            {
-                throw new IOException(BuildInsufficientMemoryMessage(fileLength, ex), ex);
-            }
-
-            byte* rawPointer = null;
-            accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPointer);
-            pointer = rawPointer + accessor.PointerOffset;
-
             var diagnostics = new List<DifDiagnostic>();
 
             int headWindowLength = checked((int)Math.Min(fileLength, DifHeaderParser.HeadWindowBytes));
-            var headWindow = new ReadOnlySpan<byte>(pointer, headWindowLength);
-            var forwardResult = DifHeaderParser.ParseHeaderAndFields(headWindow, diagnostics);
+            byte[] headBuffer = new byte[headWindowLength];
+            RandomAccessReader.ReadExactly(fileHandle, headBuffer, 0);
+            var forwardResult = DifHeaderParser.ParseHeaderAndFields(headBuffer, diagnostics);
 
             if (forwardResult is null)
             {
                 DifFileHeader invalidHeader = DifHeaderParser.CreateInvalidHeader(diagnostics);
-                var invalidIndex = new FileIndex(path, fileLength, mappedFile, accessor, pointer, invalidHeader,
+                var invalidIndex = new FileIndex(path, fileLength, fileHandle, invalidHeader,
                     new UnmanagedArray<RowIndexEntry>(1), new UnmanagedArray<SortKey>(1), diagnostics);
                 ownershipTransferred = true;
                 return invalidIndex;
@@ -85,9 +76,10 @@ public static class FileIndexer
 
             long tailWindowStart = DifHeaderParser.ComputeTailWindowStart(dataStartOffset, fileLength);
             int tailWindowLength = checked((int)(fileLength - tailWindowStart));
-            var tailWindow = new ReadOnlySpan<byte>(pointer + tailWindowStart, tailWindowLength);
+            byte[] tailBuffer = new byte[tailWindowLength];
+            RandomAccessReader.ReadExactly(fileHandle, tailBuffer, tailWindowStart);
             (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive) =
-                DifHeaderParser.ParseTrailerAndDataEnd(tailWindow, tailWindowStart, fileLength, diagnostics);
+                DifHeaderParser.ParseTrailerAndDataEnd(tailBuffer, tailWindowStart, fileLength, diagnostics);
 
             int? declaredDataRecords = null;
             if (trailerMetadata.TryGetValue(DifFormatOptions.DataRecordsKey, out string? recordsText)
@@ -115,10 +107,10 @@ public static class FileIndexer
             int idColumnIndex = header.ColumnIndexOf("_ID");
 
             (UnmanagedArray<RowIndexEntry> rowIndex, UnmanagedArray<SortKey> sortKeys) = ScanDataRegion(
-                pointer, dataStartOffset, dataEndOffsetExclusive, (byte)delimiter, idColumnIndex,
+                fileHandle, dataStartOffset, dataEndOffsetExclusive, (byte)delimiter, idColumnIndex,
                 fileLength, progress, cancellationToken);
 
-            var result = new FileIndex(path, fileLength, mappedFile, accessor, pointer, header, rowIndex, sortKeys, diagnostics);
+            var result = new FileIndex(path, fileLength, fileHandle, header, rowIndex, sortKeys, diagnostics);
             ownershipTransferred = true;
             return result;
         }
@@ -126,51 +118,13 @@ public static class FileIndexer
         {
             if (!ownershipTransferred)
             {
-                if (pointer != null)
-                {
-                    accessor!.SafeMemoryMappedViewHandle.ReleasePointer();
-                }
-                accessor?.Dispose();
-                mappedFile.Dispose();
+                fileHandle.Dispose();
             }
         }
     }
 
-    /// <summary>Win32 ERROR_NOT_ENOUGH_MEMORY (8), as the HRESULT an IOException carries when Windows refuses a file mapping.</summary>
-    private const int ErrorNotEnoughMemoryHResult = unchecked((int)0x80070008);
-
-    /// <summary>
-    /// True for the specific low-level failure this file exists to translate: Windows refusing to
-    /// create or map a memory-mapped view because it can't satisfy the request against available
-    /// memory/commit — reported as an <see cref="IOException"/> whose message is the bare, unhelpful
-    /// OS string "Not enough memory resources are available to process this command." Matches by
-    /// HResult first (reliable on Windows) and falls back to the message text so the friendlier error
-    /// below still applies if a different runtime/OS wraps the same underlying failure differently.
-    /// </summary>
-    internal static bool IsInsufficientMemoryError(IOException ex) =>
-        ex.HResult == ErrorNotEnoughMemoryHResult
-        || ex.Message.Contains("not enough memory", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Opening a file requires mapping it into one contiguous view up front (<see cref="IndexCore"/>
-    /// reads/scans directly off that pointer for the file's entire lifetime — see the class remarks).
-    /// That succeeds comfortably at this app's tested ~2 GB target, but on a much larger file it can
-    /// fail if the machine doesn't have enough free memory/page-file space to back a view that size —
-    /// the raw OS message alone doesn't explain any of that to whoever hits it.
-    /// </summary>
-    internal static string BuildInsufficientMemoryMessage(long fileLength, IOException originalError)
-    {
-        double gb = fileLength / (1024.0 * 1024.0 * 1024.0);
-        return $"This file is about {gb:N1} GB. Opening it requires mapping the whole file into " +
-               "memory at once, and this machine could not satisfy that request " +
-               $"(Windows reported: \"{originalError.Message}\"). This is well beyond the ~2 GB file " +
-               "size Bloomberg File Viewer is built and tested for. Try increasing the Windows page " +
-               "file (virtual memory) size, closing other memory-heavy applications, or opening a " +
-               "smaller file.";
-    }
-
-    private static unsafe (UnmanagedArray<RowIndexEntry> RowIndex, UnmanagedArray<SortKey> SortKeys) ScanDataRegion(
-        byte* filePointer,
+    private static (UnmanagedArray<RowIndexEntry> RowIndex, UnmanagedArray<SortKey> SortKeys) ScanDataRegion(
+        SafeFileHandle fileHandle,
         long dataStartOffset,
         long dataEndOffsetExclusive,
         byte delimiter,
@@ -180,11 +134,9 @@ public static class FileIndexer
         CancellationToken cancellationToken)
     {
         long dataLength = dataEndOffsetExclusive - dataStartOffset;
-        int chunkCount = dataLength <= 0
-            ? 1
-            : (int)Math.Max(1, Math.Min(Environment.ProcessorCount, dataLength / MinChunkBytes));
+        int chunkCount = ComputeChunkCount(dataLength);
 
-        long[] boundaries = ComputeChunkBoundaries(filePointer, dataStartOffset, dataEndOffsetExclusive, chunkCount);
+        long[] boundaries = ComputeChunkBoundaries(fileHandle, dataStartOffset, dataEndOffsetExclusive, chunkCount);
 
         var chunkRowIndexes = new UnmanagedArray<RowIndexEntry>[boundaries.Length - 1];
         var chunkSortKeys = new UnmanagedArray<SortKey>[boundaries.Length - 1];
@@ -200,7 +152,7 @@ public static class FileIndexer
                 var localRowIndex = new UnmanagedArray<RowIndexEntry>();
                 var localSortKeys = new UnmanagedArray<SortKey>();
                 ScanChunk(
-                    filePointer, boundaries[chunkIndex], boundaries[chunkIndex + 1],
+                    fileHandle, boundaries[chunkIndex], boundaries[chunkIndex + 1],
                     delimiter, idColumnIndex,
                     localRowIndex, localSortKeys, accumulator, cancellationToken);
 
@@ -258,12 +210,26 @@ public static class FileIndexer
     }
 
     /// <summary>
+    /// At least enough chunks to keep every core busy (the original heuristic), but never fewer than
+    /// needed to keep each individual chunk at or under <see cref="MaxChunkReadBytes"/> — the second
+    /// condition is what actually bounds peak memory on a huge file with few cores, where the
+    /// core-count heuristic alone would otherwise produce a handful of enormous chunks.
+    /// </summary>
+    internal static int ComputeChunkCount(long dataLength)
+    {
+        if (dataLength <= 0) return 1;
+        int byCoreCount = (int)Math.Max(1, Math.Min(Environment.ProcessorCount, dataLength / MinChunkBytes));
+        int byMaxChunkSize = checked((int)Math.Max(1, (dataLength + MaxChunkReadBytes - 1) / MaxChunkReadBytes));
+        return Math.Max(byCoreCount, byMaxChunkSize);
+    }
+
+    /// <summary>
     /// Computes <paramref name="chunkCount"/> + 1 boundary offsets bounding [dataStartOffset,
     /// dataEndOffsetExclusive) such that every boundary except the first and last falls exactly
     /// after a '\n' — i.e. each chunk's range starts and ends on a line boundary, so no line is
     /// split across chunks and none is double-counted.
     /// </summary>
-    private static unsafe long[] ComputeChunkBoundaries(byte* filePointer, long dataStartOffset, long dataEndOffsetExclusive, int chunkCount)
+    private static long[] ComputeChunkBoundaries(SafeFileHandle fileHandle, long dataStartOffset, long dataEndOffsetExclusive, int chunkCount)
     {
         var boundaries = new long[chunkCount + 1];
         boundaries[0] = dataStartOffset;
@@ -289,19 +255,40 @@ public static class FileIndexer
                 continue;
             }
 
-            // Search forward from the nominal boundary for the next '\n'; the byte right after it
-            // is the first byte of a new line, which becomes this chunk's actual start.
-            long searchStart = nominal;
-            long remaining = dataEndOffsetExclusive - searchStart;
-            var searchSpan = new ReadOnlySpan<byte>(filePointer + searchStart, checked((int)remaining));
-            int relativeNewLine = searchSpan.IndexOf((byte)'\n');
-
-            long actualBoundary = relativeNewLine < 0 ? dataEndOffsetExclusive : searchStart + relativeNewLine + 1;
+            long actualBoundary = FindNextLineStart(fileHandle, nominal, dataEndOffsetExclusive);
             boundaries[i] = actualBoundary;
             previousBoundary = actualBoundary;
         }
 
         return boundaries;
+    }
+
+    /// <summary>
+    /// Reads forward from <paramref name="searchStart"/> in bounded windows looking for the next
+    /// '\n', returning the offset of the byte right after it (the first byte of the next line), or
+    /// <paramref name="dataEndOffsetExclusive"/> if none is found before then. Bounded the same way
+    /// <see cref="ScanChunk"/> is, for the same reason: no single read should scale with file size.
+    /// </summary>
+    private static long FindNextLineStart(SafeFileHandle fileHandle, long searchStart, long dataEndOffsetExclusive)
+    {
+        byte[] buffer = new byte[LineBoundarySearchWindowBytes];
+        long pos = searchStart;
+        while (pos < dataEndOffsetExclusive)
+        {
+            int toRead = checked((int)Math.Min(LineBoundarySearchWindowBytes, dataEndOffsetExclusive - pos));
+            int read = RandomAccessReader.ReadExactly(fileHandle, buffer.AsSpan(0, toRead), pos);
+            if (read == 0) break;
+
+            int newlineIndex = buffer.AsSpan(0, read).IndexOf((byte)'\n');
+            if (newlineIndex >= 0)
+            {
+                return pos + newlineIndex + 1;
+            }
+
+            pos += read;
+            if (read < toRead) break; // EOF reached mid-read
+        }
+        return dataEndOffsetExclusive;
     }
 
     /// <summary>
@@ -311,8 +298,8 @@ public static class FileIndexer
     /// entirely (missing structural markers) is handled by DifHeaderParser. Every row is indexed
     /// and displayed as-is.
     /// </summary>
-    private static unsafe void ScanChunk(
-        byte* filePointer,
+    private static void ScanChunk(
+        SafeFileHandle fileHandle,
         long chunkStart,
         long chunkEnd,
         byte delimiter,
@@ -325,7 +312,9 @@ public static class FileIndexer
         int chunkLength = checked((int)(chunkEnd - chunkStart));
         if (chunkLength <= 0) return;
 
-        var chunkSpan = new ReadOnlySpan<byte>(filePointer + chunkStart, chunkLength);
+        byte[] buffer = new byte[chunkLength];
+        RandomAccessReader.ReadExactly(fileHandle, buffer, chunkStart);
+        var chunkSpan = new ReadOnlySpan<byte>(buffer);
 
         int pos = 0;
         long rowsSinceLastReport = 0;

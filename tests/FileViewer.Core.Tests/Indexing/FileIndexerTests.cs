@@ -152,44 +152,49 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void IsInsufficientMemoryError_MatchesTheWin32NotEnoughMemoryHResult()
+    public async Task GetRowBytes_IsSafeUnderConcurrentReads()
     {
-        // This is the exact HResult .NET assigns an IOException wrapping Win32 error 8
-        // (ERROR_NOT_ENOUGH_MEMORY) — the failure a huge file's memory-mapped view creation hits.
-        var ex = new IOException("some unrelated message") { HResult = unchecked((int)0x80070008) };
+        // FileIndex no longer holds one persistent whole-file mapping — every GetRowBytes call now
+        // does its own RandomAccess.Read. This is the property the rest of the app (grid rendering
+        // on the UI thread, export/sort/filter on background threads) relies on being safe to call
+        // from multiple threads at once against the same FileIndex.
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("FixedIncomeAsia.dif"));
 
-        Assert.True(FileIndexer.IsInsufficientMemoryError(ex));
+        var tasks = new Task[50];
+        for (int t = 0; t < tasks.Length; t++)
+        {
+            tasks[t] = Task.Run(() =>
+            {
+                for (int i = 0; i < 50; i++)
+                {
+                    int rowIndex = i % (int)index.RowIndex.Count;
+                    string[] fields = DifRowParser.ParseRow(index.GetRowBytes(rowIndex), (byte)index.Header.Delimiter, DifFormatOptions.TextEncoding);
+                    Assert.Equal($"SEC{1000 + rowIndex:D4} HK Equity", fields[0]);
+                }
+            });
+        }
+
+        await Task.WhenAll(tasks);
     }
 
-    [Fact]
-    public void IsInsufficientMemoryError_AlsoMatchesByMessageWhenHResultDoesNotLineUp()
+    [Theory]
+    [InlineData(0, 1)] // empty data region — always exactly one (no-op) chunk
+    [InlineData(1024, 1)] // tiny file — well under both the core-count and max-chunk-size thresholds
+    [InlineData(FileIndexer.MaxChunkReadBytes * 3, 3)] // no cores would ever need to be involved for the cap alone to force multiple chunks
+    public void ComputeChunkCount_NeverLetsAnySingleChunkExceedTheMaxReadSize(long dataLength, int minimumExpectedChunks)
     {
-        // Belt-and-braces path: some runtimes/platforms may not preserve the Win32 HResult exactly,
-        // so the same underlying OS message alone should still be recognized.
-        var ex = new IOException("Not enough memory resources are available to process this command.");
+        // The core-count heuristic alone would produce very few, very large chunks for a huge file
+        // on a low-core machine — this is what actually bounds peak Phase B memory regardless of
+        // file size or Environment.ProcessorCount.
+        int chunkCount = FileIndexer.ComputeChunkCount(dataLength);
 
-        Assert.True(FileIndexer.IsInsufficientMemoryError(ex));
-    }
-
-    [Fact]
-    public void IsInsufficientMemoryError_DoesNotMatchUnrelatedIOExceptions()
-    {
-        var ex = new IOException("The process cannot access the file because it is being used by another process.");
-
-        Assert.False(FileIndexer.IsInsufficientMemoryError(ex));
-    }
-
-    [Fact]
-    public void BuildInsufficientMemoryMessage_ExplainsTheFileSizeAndOffersActionableRemedies()
-    {
-        long twentyGigabytes = 20L * 1024 * 1024 * 1024;
-        var original = new IOException("Not enough memory resources are available to process this command.");
-
-        string message = FileIndexer.BuildInsufficientMemoryMessage(twentyGigabytes, original);
-
-        Assert.Contains("20.0 GB", message);
-        Assert.Contains("~2 GB", message);
-        Assert.Contains(original.Message, message);
-        Assert.Contains("page file", message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(chunkCount >= minimumExpectedChunks,
+            $"Expected at least {minimumExpectedChunks} chunk(s) for a {dataLength}-byte data region, got {chunkCount}.");
+        if (dataLength > 0)
+        {
+            long largestPossibleChunk = (dataLength + chunkCount - 1) / chunkCount;
+            Assert.True(largestPossibleChunk <= FileIndexer.MaxChunkReadBytes,
+                $"A {dataLength}-byte data region split into {chunkCount} chunks could still produce a chunk up to {largestPossibleChunk} bytes, exceeding MaxChunkReadBytes.");
+        }
     }
 }
