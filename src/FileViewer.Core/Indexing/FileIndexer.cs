@@ -34,15 +34,31 @@ public static class FileIndexer
     {
         long fileLength = new FileInfo(path).Length;
 
-        var mappedFile = MemoryMappedFile.CreateFromFile(path, FileMode.Open, mapName: null, capacity: 0, MemoryMappedFileAccess.Read);
+        MemoryMappedFile mappedFile;
+        try
+        {
+            mappedFile = MemoryMappedFile.CreateFromFile(path, FileMode.Open, mapName: null, capacity: 0, MemoryMappedFileAccess.Read);
+        }
+        catch (IOException ex) when (IsInsufficientMemoryError(ex))
+        {
+            throw new IOException(BuildInsufficientMemoryMessage(fileLength, ex), ex);
+        }
+
         MemoryMappedViewAccessor? accessor = null;
         byte* pointer = null;
         bool ownershipTransferred = false;
         try
         {
-            accessor = fileLength == 0
-                ? mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read)
-                : mappedFile.CreateViewAccessor(0, fileLength, MemoryMappedFileAccess.Read);
+            try
+            {
+                accessor = fileLength == 0
+                    ? mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read)
+                    : mappedFile.CreateViewAccessor(0, fileLength, MemoryMappedFileAccess.Read);
+            }
+            catch (IOException ex) when (IsInsufficientMemoryError(ex))
+            {
+                throw new IOException(BuildInsufficientMemoryMessage(fileLength, ex), ex);
+            }
 
             byte* rawPointer = null;
             accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPointer);
@@ -114,6 +130,39 @@ public static class FileIndexer
                 mappedFile.Dispose();
             }
         }
+    }
+
+    /// <summary>Win32 ERROR_NOT_ENOUGH_MEMORY (8), as the HRESULT an IOException carries when Windows refuses a file mapping.</summary>
+    private const int ErrorNotEnoughMemoryHResult = unchecked((int)0x80070008);
+
+    /// <summary>
+    /// True for the specific low-level failure this file exists to translate: Windows refusing to
+    /// create or map a memory-mapped view because it can't satisfy the request against available
+    /// memory/commit — reported as an <see cref="IOException"/> whose message is the bare, unhelpful
+    /// OS string "Not enough memory resources are available to process this command." Matches by
+    /// HResult first (reliable on Windows) and falls back to the message text so the friendlier error
+    /// below still applies if a different runtime/OS wraps the same underlying failure differently.
+    /// </summary>
+    internal static bool IsInsufficientMemoryError(IOException ex) =>
+        ex.HResult == ErrorNotEnoughMemoryHResult
+        || ex.Message.Contains("not enough memory", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Opening a file requires mapping it into one contiguous view up front (<see cref="IndexCore"/>
+    /// reads/scans directly off that pointer for the file's entire lifetime — see the class remarks).
+    /// That succeeds comfortably at this app's tested ~2 GB target, but on a much larger file it can
+    /// fail if the machine doesn't have enough free memory/page-file space to back a view that size —
+    /// the raw OS message alone doesn't explain any of that to whoever hits it.
+    /// </summary>
+    internal static string BuildInsufficientMemoryMessage(long fileLength, IOException originalError)
+    {
+        double gb = fileLength / (1024.0 * 1024.0 * 1024.0);
+        return $"This file is about {gb:N1} GB. Opening it requires mapping the whole file into " +
+               "memory at once, and this machine could not satisfy that request " +
+               $"(Windows reported: \"{originalError.Message}\"). This is well beyond the ~2 GB file " +
+               "size Bloomberg File Viewer is built and tested for. Try increasing the Windows page " +
+               "file (virtual memory) size, closing other memory-heavy applications, or opening a " +
+               "smaller file.";
     }
 
     private static unsafe (UnmanagedArray<RowIndexEntry> RowIndex, UnmanagedArray<SortKey> SortKeys) ScanDataRegion(
