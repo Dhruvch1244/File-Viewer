@@ -214,6 +214,32 @@ public class DifHeaderParserTests
     }
 
     [Fact]
+    public void RealWorldTrailer_MetadataBeforeEndOfFileAndImatrl_ParsesCorrectly()
+    {
+        // A real sample's actual trailer shape: DATARECORDS/TIMEFINISHED sit directly after
+        // END-OF-DATA with no marker before them at all, followed by an END-OF-FILE line and then
+        // IMATRL (not INATRL) as the file's very last line — the mirror image of the
+        // IMAHDR/START-OF-FILE pair at the top. This is a different order than every other fixture
+        // (marker immediately after END-OF-DATA, metadata after that), which the trailer scan must
+        // handle without assuming either order. The header/trailer transmission lines are also
+        // space-delimited here, not pipe-delimited, with trailing content after the marker itself —
+        // exactly what HeaderMarkerLine_WithTrailingPipeDelimitedContent_StillOpens fixed generally.
+        byte[] content = FixtureLoader.ReadBytes("real_world_trailer_before_end_of_file.dif");
+
+        DifFileHeader header = DifHeaderParser.Parse(content);
+
+        Assert.True(header.IsValid);
+        Assert.DoesNotContain(header.Diagnostics, d => d.Severity == DifDiagnosticSeverity.Error);
+        Assert.Equal(DifFormatOptions.HeaderStartAlt, header.HeaderMarker);
+        Assert.True(header.HasFileStartMarker);
+        Assert.Equal(DifFormatOptions.TrailerAlt, header.TrailerMarker);
+        Assert.True(header.HasFileEndMarker);
+        Assert.Equal("Thu Jul 23 19:08:48 EDT 2026", header.TrailerMetadata["TIMEFINISHED"]);
+        Assert.Equal(22617, header.DeclaredDataRecords);
+        Assert.Equal(3, CountDataRows(content, header));
+    }
+
+    [Fact]
     public void ImplicitPrefix_IsAppliedUnconditionally_RegardlessOfRowShapeOrFileSize()
     {
         // The security-ID|error-code|field-count triplet is a fixed property of the wire format,

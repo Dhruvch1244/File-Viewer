@@ -42,11 +42,11 @@ public static class DifHeaderParser
 
         long tailWindowStart = ComputeTailWindowStart(dataStartOffset, content.Length);
         ReadOnlySpan<byte> tailWindow = content[checked((int)tailWindowStart)..];
-        (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive) =
+        (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive, string trailerMarker, bool hasFileEndMarker) =
             ParseTrailerAndDataEnd(tailWindow, tailWindowStart, content.Length, diagnostics);
 
         return BuildHeader(headerMarker, hasFileStartMarker, headerMetadata, delimiter, columnNames,
-            postFieldsMetadata, trailerMetadata, dataStartOffset, dataEndOffsetExclusive, diagnostics);
+            postFieldsMetadata, trailerMetadata, trailerMarker, hasFileEndMarker, dataStartOffset, dataEndOffsetExclusive, diagnostics);
     }
 
     private static DifFileHeader BuildHeader(
@@ -57,6 +57,8 @@ public static class DifHeaderParser
         List<string> columnNames,
         Dictionary<string, string> postFieldsMetadata,
         Dictionary<string, string> trailerMetadata,
+        string trailerMarker,
+        bool hasFileEndMarker,
         long dataStartOffset,
         long dataEndOffsetExclusive,
         List<DifDiagnostic> diagnostics)
@@ -77,6 +79,8 @@ public static class DifHeaderParser
             ColumnNames = columnNames,
             PostFieldsMetadata = postFieldsMetadata,
             TrailerMetadata = trailerMetadata,
+            TrailerMarker = trailerMarker,
+            HasFileEndMarker = hasFileEndMarker,
             DeclaredDataRecords = declaredDataRecords,
             DataStartOffset = dataStartOffset,
             DataEndOffsetExclusive = dataEndOffsetExclusive,
@@ -272,19 +276,24 @@ public static class DifHeaderParser
     /// <summary>
     /// Scans <paramref name="tailWindow"/> (the bytes of the file starting at absolute offset
     /// <paramref name="tailWindowFileOffset"/>, as computed by <see cref="ComputeTailWindowStart"/>)
-    /// for the last END-OF-DATA and INATRL marker lines, and parses the trailer's KEY=VALUE lines.
-    /// Falls back to treating the data section as extending to <paramref name="totalFileLength"/>
-    /// and the trailer as empty if the respective markers aren't found in the window — the file
-    /// still opens (PRS §8 Reliability).
+    /// for the last END-OF-DATA line, then scans everything after it for trailer content. Real
+    /// exports don't agree on the trailer's exact shape: some put an INATRL/IMATRL marker line
+    /// immediately after END-OF-DATA with KEY=VALUE metadata (DATARECORDS, ...) after that; others
+    /// put the KEY=VALUE metadata (DATARECORDS, TIMEFINISHED, ...) directly after END-OF-DATA with
+    /// no marker at all, followed by an optional END-OF-FILE line and then the INATRL/IMATRL marker
+    /// as the file's very last line (mirroring the header/START-OF-FILE pair at the top of the
+    /// file). Rather than assume one fixed order, every line after END-OF-DATA is classified
+    /// independently — a marker, or KEY=VALUE metadata, or (if neither) a malformed-line warning —
+    /// so either arrangement, or a mix, is handled the same way. Falls back to treating the data
+    /// section as extending to <paramref name="totalFileLength"/> if END-OF-DATA itself isn't found
+    /// in the window — the file still opens (PRS §8 Reliability).
     /// </summary>
-    public static (Dictionary<string, string> TrailerMetadata, long DataEndOffsetExclusive) ParseTrailerAndDataEnd(
-        ReadOnlySpan<byte> tailWindow, long tailWindowFileOffset, long totalFileLength, List<DifDiagnostic> diagnostics)
+    public static (Dictionary<string, string> TrailerMetadata, long DataEndOffsetExclusive, string TrailerMarker, bool HasFileEndMarker)
+        ParseTrailerAndDataEnd(ReadOnlySpan<byte> tailWindow, long tailWindowFileOffset, long totalFileLength, List<DifDiagnostic> diagnostics)
     {
-        // Pass 1: find the last DataEnd / Trailer marker lines within the window (there should be
-        // at most one of each; "last" defends against a data row that happens to collide with a
-        // marker string). Offsets are tracked relative to the window, converted to absolute after.
+        // Find the last END-OF-DATA line within the window ("last" defends against a data row that
+        // happens to collide with the marker string).
         int? dataEndRelativeOffset = null;
-        int? trailerRelativeOffset = null;
         {
             int pos = 0;
             while (pos < tailWindow.Length)
@@ -295,35 +304,51 @@ public static class DifHeaderParser
                 {
                     dataEndRelativeOffset = lineStart;
                 }
-                else if (DifLineScanner.LineEqualsMarker(line, DifFormatOptions.Trailer))
-                {
-                    trailerRelativeOffset = lineStart;
-                }
             }
         }
 
         var trailerMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (trailerRelativeOffset is int trailerStart)
+        string trailerMarker = DifFormatOptions.Trailer;
+        bool hasFileEndMarker = false;
+        bool foundTrailerMarker = false;
+
+        if (dataEndRelativeOffset is int dataEndStart)
         {
-            int pos = trailerStart;
-            DifLineScanner.TryReadLine(tailWindow, ref pos, out _); // consume the INATRL marker line itself
+            int pos = dataEndStart;
+            DifLineScanner.TryReadLine(tailWindow, ref pos, out _); // consume the END-OF-DATA line itself
             while (DifLineScanner.TryReadLine(tailWindow, ref pos, out ReadOnlySpan<byte> line))
             {
-                if (DifLineScanner.TryParseKeyValue(line, DifFormatOptions.TextEncoding, out string key, out string value))
+                if (DifLineScanner.LineEqualsMarker(line, DifFormatOptions.Trailer))
+                {
+                    trailerMarker = DifFormatOptions.Trailer;
+                    foundTrailerMarker = true;
+                }
+                else if (DifLineScanner.LineEqualsMarker(line, DifFormatOptions.TrailerAlt))
+                {
+                    trailerMarker = DifFormatOptions.TrailerAlt;
+                    foundTrailerMarker = true;
+                }
+                else if (DifLineScanner.LineEqualsMarker(line, DifFormatOptions.FileEnd))
+                {
+                    hasFileEndMarker = true;
+                }
+                else if (DifLineScanner.TryParseKeyValue(line, DifFormatOptions.TextEncoding, out string key, out string value))
                 {
                     trailerMetadata[key] = value;
                 }
                 else if (DifLineScanner.TrimTrailingCr(line).Length > 0)
                 {
                     diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Warning,
-                        "Ignoring malformed trailer metadata line (expected KEY=VALUE).", tailWindowFileOffset + pos));
+                        $"Ignoring malformed trailer line (expected KEY=VALUE, or '{DifFormatOptions.Trailer}'/'{DifFormatOptions.TrailerAlt}'/'{DifFormatOptions.FileEnd}').",
+                        tailWindowFileOffset + pos));
                 }
             }
         }
-        else
+
+        if (!foundTrailerMarker)
         {
             diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Warning,
-                $"No '{DifFormatOptions.Trailer}' marker found within the trailing {DifFormatOptions.TrailerScanWindowBytes} bytes; treating trailer as empty.",
+                $"No '{DifFormatOptions.Trailer}' or '{DifFormatOptions.TrailerAlt}' marker found within the trailing {DifFormatOptions.TrailerScanWindowBytes} bytes; treating trailer as whatever metadata (if any) was found.",
                 totalFileLength));
         }
 
@@ -340,6 +365,6 @@ public static class DifHeaderParser
             dataEndOffsetExclusive = totalFileLength;
         }
 
-        return (trailerMetadata, dataEndOffsetExclusive);
+        return (trailerMetadata, dataEndOffsetExclusive, trailerMarker, hasFileEndMarker);
     }
 }

@@ -8,9 +8,10 @@ namespace FileViewer.Core.Export;
 /// back through the parser reproduces the resolved rows. When constructed <see cref="ForHeader"/> a
 /// source <see cref="DifFileHeader"/>, also reproduces everything that header parsed but isn't
 /// itself a column value — the header marker spelling (INAHDR/IMAHDR), the START-OF-FILE marker,
-/// pre-fields metadata (FIRMNAME, PROGRAMNAME, ...), post-fields metadata (TIMESTARTED, ...), and
-/// trailer metadata beyond DATARECORDS — so an export of an edited file keeps looking like the
-/// source file it came from instead of shedding everything the row grid doesn't display.
+/// pre-fields metadata (FIRMNAME, PROGRAMNAME, ...), post-fields metadata (TIMESTARTED, ...),
+/// trailer metadata beyond DATARECORDS, the closing trailer marker spelling (INATRL/IMATRL), and the
+/// END-OF-FILE marker — so an export of an edited file keeps looking like the source file it came
+/// from instead of shedding everything the row grid doesn't display.
 /// </summary>
 public sealed class DifExporter(
     char delimiter,
@@ -18,7 +19,9 @@ public sealed class DifExporter(
     IReadOnlyDictionary<string, string>? postFieldsMetadata = null,
     IReadOnlyDictionary<string, string>? trailerMetadata = null,
     string headerMarker = DifFormatOptions.HeaderStart,
-    bool includeFileStartMarker = false) : IRowExporter
+    bool includeFileStartMarker = false,
+    string trailerMarker = DifFormatOptions.Trailer,
+    bool includeFileEndMarker = false) : IRowExporter
 {
     private StreamWriter? _writer;
     private int _rowCount;
@@ -30,7 +33,9 @@ public sealed class DifExporter(
         header.PostFieldsMetadata,
         header.TrailerMetadata,
         header.HeaderMarker,
-        header.HasFileStartMarker);
+        header.HasFileStartMarker,
+        header.TrailerMarker,
+        header.HasFileEndMarker);
 
     public void Begin(Stream stream, IReadOnlyList<string> columnNames)
     {
@@ -76,11 +81,14 @@ public sealed class DifExporter(
     public void End()
     {
         _writer!.WriteLine(DifFormatOptions.DataEnd);
-        _writer.WriteLine(DifFormatOptions.Trailer);
 
         // DATARECORDS must reflect what was actually written (edits can add/remove rows), so it's
-        // always recomputed here rather than trusting the source file's original value — but every
-        // *other* trailer key the source file had is still reproduced, in its original position.
+        // always recomputed here rather than trusting the source file's original value — every
+        // *other* trailer key the source file had is still reproduced. Metadata is written before
+        // the closing marker(s), matching how real "getdata"-style exports structure their trailer
+        // (DATARECORDS/TIMEFINISHED directly after END-OF-DATA, then an optional END-OF-FILE line,
+        // then the INATRL/IMATRL marker as the very last line) — but DifHeaderParser's trailer scan
+        // is order-independent, so this ordering is a choice, not a requirement for round-tripping.
         bool wroteDataRecords = false;
         if (trailerMetadata is not null)
         {
@@ -95,6 +103,11 @@ public sealed class DifExporter(
         {
             _writer.WriteLine($"{DifFormatOptions.DataRecordsKey}={_rowCount}");
         }
+        if (includeFileEndMarker)
+        {
+            _writer.WriteLine(DifFormatOptions.FileEnd);
+        }
+        _writer.WriteLine(trailerMarker);
         _writer.Flush();
     }
 

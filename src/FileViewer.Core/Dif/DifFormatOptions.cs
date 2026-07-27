@@ -30,6 +30,12 @@ public static class DifFormatOptions
     public const string DataEnd = "END-OF-DATA";
     public const string Trailer = "INATRL";
 
+    /// <summary>Mirrors <see cref="HeaderStartAlt"/>: some exports spell the closing trailer marker "IMATRL" instead of "INATRL". Both are accepted.</summary>
+    public const string TrailerAlt = "IMATRL";
+
+    /// <summary>Mirrors <see cref="FileStart"/> at the other end of the file — an optional marker line some exports emit right before the trailer marker. Recognized and skipped silently.</summary>
+    public const string FileEnd = "END-OF-FILE";
+
     public const string DelimiterKey = "DELIMITER";
     public const string DataRecordsKey = "DATARECORDS";
 
