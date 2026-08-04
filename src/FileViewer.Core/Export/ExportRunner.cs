@@ -47,12 +47,9 @@ public static class ExportRunner
             yield return i;
         }
 
-        foreach (RowOp op in overlay.RowOps)
+        foreach (long rowIndex in overlay.GetLiveAddedOrDuplicatedRowIndices())
         {
-            if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && overlay.GetRowState(op.RowIndex) != RowState.Deleted)
-            {
-                yield return op.RowIndex;
-            }
+            yield return rowIndex;
         }
     }
 }

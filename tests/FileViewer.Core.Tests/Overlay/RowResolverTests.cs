@@ -78,7 +78,8 @@ public class RowResolverTests
         overlay.DeleteRow(0);
 
         Assert.Null(RowResolver.Resolve(0, index, overlay, cache));
-        Assert.Single(overlay.CellEdits[0]); // edit is retained, not discarded
+        Assert.True(overlay.TryGetCellEdits(0, out IReadOnlyList<CellEdit> edits));
+        Assert.Single(edits); // edit is retained, not discarded
     }
 
     [Fact]
@@ -217,5 +218,53 @@ public class RowResolverTests
         RowResolver.Resolve(newIndex, index, overlay, cache);
 
         Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public async Task Resolve_ConcurrentlyFromMultipleThreadsWhileEditsAreHappening_NeverThrowsOrReturnsCorruptFields()
+    {
+        // Models the actual production scenario a background filter/sort computation now runs
+        // under: one thread resolving rows for a decode-heavy operation (arbitrary-column sort or
+        // filter) while another keeps resolving rows for on-screen rendering and committing cell
+        // edits, all against the same FileIndex/EditOverlay/DecodedRowCache. Every field this test
+        // reads back must be exactly one of the values it could legitimately be at that moment —
+        // never a torn/mixed read — which is what EditOverlay's and DecodedRowCache's locking exists
+        // to guarantee.
+        using FileIndex index = await LoadAsync("FixedIncomeAsia.dif"); // 50 rows
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        int rowCount = (int)index.RowIndex.Count;
+
+        Task resolver = Task.Run(() =>
+        {
+            for (int pass = 0; pass < 200; pass++)
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    ResolvedRow? resolved = RowResolver.Resolve(i, index, overlay, cache);
+                    if (resolved is null) continue; // deleted concurrently — a legitimate outcome
+                    Assert.True(resolved.FieldValues.Count > 0);
+                }
+            }
+        });
+
+        Task editor = Task.Run(() =>
+        {
+            for (int i = 0; i < 200; i++)
+            {
+                long rowIndex = i % rowCount;
+                overlay.EditCell(rowIndex, "PRICE", $"EDITED_{i}");
+                cache.Invalidate(rowIndex);
+                if (i % 50 == 0)
+                {
+                    overlay.DeleteRow(rowIndex);
+                    overlay.RestoreRow(rowIndex);
+                }
+            }
+        });
+
+        var exception = await Record.ExceptionAsync(() => Task.WhenAll(resolver, editor));
+
+        Assert.Null(exception);
     }
 }

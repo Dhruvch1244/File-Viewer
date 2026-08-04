@@ -39,7 +39,7 @@ public static class RowResolver
 
         if (rowIndex < 0)
         {
-            baseFields = overlay.AddedRowData.TryGetValue(rowIndex, out string[]? template) ? template : [];
+            baseFields = overlay.TryGetAddedRowTemplate(rowIndex, out IReadOnlyList<string> template) ? template : [];
         }
         else if (cache.TryGet(rowIndex, out DecodedRow? cached))
         {
@@ -56,7 +56,7 @@ public static class RowResolver
         string[] resolvedFields = [.. baseFields]; // defensive copy — never mutate a cached/template array in place
 
         bool hasEdits = false;
-        if (overlay.CellEdits.TryGetValue(rowIndex, out List<CellEdit>? edits))
+        if (overlay.TryGetCellEdits(rowIndex, out IReadOnlyList<CellEdit> edits))
         {
             foreach (CellEdit edit in edits)
             {
