@@ -1,7 +1,7 @@
 namespace FileViewer.Core.Overlay;
 
 /// <summary>
-/// A single entry in the undo stack (<see cref="EditOverlay.RowOps"/>). <see cref="PreviousState"/>
+/// A single entry in the undo stack (<see cref="EditOverlay.GetPendingRowOps"/>). <see cref="PreviousState"/>
 /// is an addition beyond the PRS §9 data-model sketch: without it, undoing a row that was, say,
 /// Added and then Deleted would have no way to tell whether it should revert to Added or to
 /// Normal — a flat <c>Dictionary&lt;long, RowState&gt;</c> loses that history the moment a new

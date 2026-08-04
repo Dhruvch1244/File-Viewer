@@ -10,42 +10,69 @@ namespace FileViewer.Core.Overlay;
 /// synthetic negative indices minted here, so they can never collide with a real base index and
 /// "is this an added row" is a trivial sign check.
 ///
-/// <see cref="RowOps"/> is the undo stack (append/pop-only). Cell edits are intentionally not part
-/// of it — only row-structural operations (add/delete/duplicate/restore) are individually
-/// undoable, matching the PRS §9 data-model sketch, which comments <c>RowOps</c> alone as "also the
-/// undo stack".
+/// Every public member is protected by a single lock: rows are resolved (read) from whichever
+/// thread is rendering/exporting/sorting/filtering at the time, including a background thread
+/// while the UI thread keeps rendering the page currently on screen — the two can genuinely
+/// overlap. All access goes through methods (never a raw exposed collection you could iterate
+/// outside the lock), so there is no way to accidentally bypass the lock from a new call site.
+///
+/// <see cref="GetPendingRowOps"/> is a snapshot of the undo stack (append/pop-only). Cell edits are
+/// intentionally not part of it — only row-structural operations (add/delete/duplicate/restore) are
+/// individually undoable, matching the PRS §9 data-model sketch, which comments the row-op list
+/// alone as "also the undo stack".
 /// </summary>
 public sealed class EditOverlay
 {
+    private readonly object _gate = new();
+    private readonly Dictionary<long, List<CellEdit>> _cellEdits = new();
+    private readonly List<RowOp> _rowOps = new();
+    private readonly Dictionary<long, RowState> _rowStateIndex = new();
+    private readonly Dictionary<long, string[]> _addedRowData = new();
     private long _nextSyntheticIndex = -1;
 
-    public Dictionary<long, List<CellEdit>> CellEdits { get; } = new();
-    public List<RowOp> RowOps { get; } = new();
-    public Dictionary<long, RowState> RowStateIndex { get; } = new();
-    public Dictionary<long, string[]> AddedRowData { get; } = new();
-
-    public bool CanUndo => RowOps.Count > 0;
+    public bool CanUndo { get { lock (_gate) return _rowOps.Count > 0; } }
 
     /// <summary>Records (or replaces, for repeated edits to the same cell) an edit. Last write for a given column wins during resolution.</summary>
     public void EditCell(long rowIndex, string column, string newValue)
     {
-        if (!CellEdits.TryGetValue(rowIndex, out List<CellEdit>? edits))
+        lock (_gate)
         {
-            edits = [];
-            CellEdits[rowIndex] = edits;
+            if (!_cellEdits.TryGetValue(rowIndex, out List<CellEdit>? edits))
+            {
+                edits = [];
+                _cellEdits[rowIndex] = edits;
+            }
+            edits.Add(new CellEdit(rowIndex, column, newValue));
         }
-        edits.Add(new CellEdit(rowIndex, column, newValue));
+    }
+
+    /// <summary>Snapshot of the edits recorded for a row, or false if it has none. The returned list is a copy — safe to enumerate after the call regardless of what happens on another thread afterward.</summary>
+    public bool TryGetCellEdits(long rowIndex, out IReadOnlyList<CellEdit> edits)
+    {
+        lock (_gate)
+        {
+            if (_cellEdits.TryGetValue(rowIndex, out List<CellEdit>? found))
+            {
+                edits = [.. found];
+                return true;
+            }
+            edits = [];
+            return false;
+        }
     }
 
     /// <summary>Adds a new blank row (all columns empty) and returns its synthetic row index.</summary>
     public long AddRow(IReadOnlyList<string> columnNames)
     {
-        long newIndex = _nextSyntheticIndex--;
-        var blank = new string[columnNames.Count];
-        Array.Fill(blank, string.Empty);
-        AddedRowData[newIndex] = blank;
-        PushOp(RowOpType.Add, newIndex);
-        return newIndex;
+        lock (_gate)
+        {
+            long newIndex = _nextSyntheticIndex--;
+            var blank = new string[columnNames.Count];
+            Array.Fill(blank, string.Empty);
+            _addedRowData[newIndex] = blank;
+            PushOpNoLock(RowOpType.Add, newIndex);
+            return newIndex;
+        }
     }
 
     /// <summary>
@@ -55,20 +82,44 @@ public sealed class EditOverlay
     /// </summary>
     public long DuplicateRow(IReadOnlyList<string> resolvedSourceFields)
     {
-        long newIndex = _nextSyntheticIndex--;
-        AddedRowData[newIndex] = [.. resolvedSourceFields];
-        PushOp(RowOpType.Duplicate, newIndex);
-        return newIndex;
+        lock (_gate)
+        {
+            long newIndex = _nextSyntheticIndex--;
+            _addedRowData[newIndex] = [.. resolvedSourceFields];
+            PushOpNoLock(RowOpType.Duplicate, newIndex);
+            return newIndex;
+        }
     }
 
-    public void DeleteRow(long rowIndex) => PushOp(RowOpType.Delete, rowIndex);
+    /// <summary>Snapshot of an added/duplicated row's template fields, or false if <paramref name="rowIndex"/> isn't one (or was undone). The returned list is a copy.</summary>
+    public bool TryGetAddedRowTemplate(long rowIndex, out IReadOnlyList<string> template)
+    {
+        lock (_gate)
+        {
+            if (_addedRowData.TryGetValue(rowIndex, out string[]? found))
+            {
+                template = found;
+                return true;
+            }
+            template = [];
+            return false;
+        }
+    }
+
+    public void DeleteRow(long rowIndex)
+    {
+        lock (_gate) PushOpNoLock(RowOpType.Delete, rowIndex);
+    }
 
     /// <summary>Bulk delete is N independent single-row operations — undo reverses them one row at a time.</summary>
     public void BulkDelete(IEnumerable<long> rowIndices)
     {
-        foreach (long rowIndex in rowIndices)
+        lock (_gate)
         {
-            DeleteRow(rowIndex);
+            foreach (long rowIndex in rowIndices)
+            {
+                PushOpNoLock(RowOpType.Delete, rowIndex);
+            }
         }
     }
 
@@ -80,33 +131,72 @@ public sealed class EditOverlay
     /// </summary>
     public bool RestoreRow(long rowIndex)
     {
-        for (int i = RowOps.Count - 1; i >= 0; i--)
+        lock (_gate)
         {
-            if (RowOps[i].RowIndex == rowIndex)
+            for (int i = _rowOps.Count - 1; i >= 0; i--)
             {
-                RowOp op = RowOps[i];
-                RowOps.RemoveAt(i);
-                ApplyReversal(op);
-                return true;
+                if (_rowOps[i].RowIndex == rowIndex)
+                {
+                    RowOp op = _rowOps[i];
+                    _rowOps.RemoveAt(i);
+                    ApplyReversalNoLock(op);
+                    return true;
+                }
             }
+            return false;
         }
-        return false;
     }
 
     /// <summary>Reverses the single most recent row operation (LIFO).</summary>
     public void Undo()
     {
-        if (RowOps.Count == 0) return;
-        RowOp op = RowOps[^1];
-        RowOps.RemoveAt(RowOps.Count - 1);
-        ApplyReversal(op);
+        lock (_gate)
+        {
+            if (_rowOps.Count == 0) return;
+            RowOp op = _rowOps[^1];
+            _rowOps.RemoveAt(_rowOps.Count - 1);
+            ApplyReversalNoLock(op);
+        }
     }
 
-    public RowState GetRowState(long rowIndex) => RowStateIndex.GetValueOrDefault(rowIndex, RowState.Normal);
-
-    private void PushOp(RowOpType type, long rowIndex)
+    public RowState GetRowState(long rowIndex)
     {
-        RowState previousState = GetRowState(rowIndex);
+        lock (_gate) return GetRowStateNoLock(rowIndex);
+    }
+
+    /// <summary>Snapshot of the pending row-op undo stack, oldest first. Rarely needed outside tests — production callers that just need "which added/duplicated rows are still live" should use <see cref="GetLiveAddedOrDuplicatedRowIndices"/> instead of re-deriving it from this.</summary>
+    public IReadOnlyList<RowOp> GetPendingRowOps()
+    {
+        lock (_gate) return [.. _rowOps];
+    }
+
+    /// <summary>
+    /// Every currently-live Added/Duplicated row's synthetic index, in creation order — the same
+    /// "which added rows should still appear" computation every base-row-order builder (session
+    /// export order, the grid's effective row order, the toolbar's arbitrary-column sort candidate
+    /// list) needs, kept here so it's both lock-protected and not duplicated at each call site.
+    /// </summary>
+    public IReadOnlyList<long> GetLiveAddedOrDuplicatedRowIndices()
+    {
+        lock (_gate)
+        {
+            var result = new List<long>();
+            foreach (RowOp op in _rowOps)
+            {
+                if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && GetRowStateNoLock(op.RowIndex) != RowState.Deleted)
+                {
+                    result.Add(op.RowIndex);
+                }
+            }
+            return result;
+        }
+    }
+
+    private RowState GetRowStateNoLock(long rowIndex) => _rowStateIndex.GetValueOrDefault(rowIndex, RowState.Normal);
+
+    private void PushOpNoLock(RowOpType type, long rowIndex)
+    {
+        RowState previousState = GetRowStateNoLock(rowIndex);
         RowState newState = type switch
         {
             RowOpType.Add => RowState.Added,
@@ -116,11 +206,11 @@ public sealed class EditOverlay
             _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
         };
 
-        RowOps.Add(new RowOp(type, rowIndex, previousState));
-        RowStateIndex[rowIndex] = newState;
+        _rowOps.Add(new RowOp(type, rowIndex, previousState));
+        _rowStateIndex[rowIndex] = newState;
     }
 
-    private void ApplyReversal(RowOp op)
+    private void ApplyReversalNoLock(RowOp op)
     {
         switch (op.Type)
         {
@@ -128,27 +218,27 @@ public sealed class EditOverlay
             case RowOpType.Duplicate:
                 // Undoing an add/duplicate discards it entirely, including any edits made to it
                 // while it existed only in the overlay.
-                RowStateIndex.Remove(op.RowIndex);
-                AddedRowData.Remove(op.RowIndex);
-                CellEdits.Remove(op.RowIndex);
+                _rowStateIndex.Remove(op.RowIndex);
+                _addedRowData.Remove(op.RowIndex);
+                _cellEdits.Remove(op.RowIndex);
                 break;
 
             case RowOpType.Delete:
                 if (op.PreviousState == RowState.Normal)
                 {
-                    RowStateIndex.Remove(op.RowIndex);
+                    _rowStateIndex.Remove(op.RowIndex);
                 }
                 else
                 {
-                    RowStateIndex[op.RowIndex] = op.PreviousState;
+                    _rowStateIndex[op.RowIndex] = op.PreviousState;
                 }
                 break;
 
             case RowOpType.Restore:
-                // Only reachable if a Restore op were ever pushed onto RowOps (RestoreRow above
-                // reverses Delete ops directly rather than pushing its own entry); kept for
+                // Only reachable if a Restore op were ever pushed onto the row-op list (RestoreRow
+                // above reverses Delete ops directly rather than pushing its own entry); kept for
                 // completeness against the RowOpType enum.
-                RowStateIndex[op.RowIndex] = RowState.Deleted;
+                _rowStateIndex[op.RowIndex] = RowState.Deleted;
                 break;
         }
     }

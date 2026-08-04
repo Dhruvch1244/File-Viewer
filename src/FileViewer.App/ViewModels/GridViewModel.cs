@@ -11,10 +11,13 @@ namespace FileViewer.App.ViewModels;
 /// <summary>
 /// Owns the grid's data source, column list, current selection, and the row-operation/sort
 /// commands. Clicking the "_ID" column header uses Core's fast unmanaged-key sort
-/// (<see cref="FileViewerSession.ApplySort"/>); clicking any other column header falls back to
-/// <see cref="RowSorter.SortByColumn"/>, which decodes every candidate row — the same acknowledged
-/// slower path as search/filter (PRS §8), since there's no pre-extracted sort key for anything but
-/// "_ID".
+/// (<see cref="FileViewerSession.ApplySort"/>, synchronous — it only permutes a pre-extracted key
+/// array, no row decoding); clicking any other column header, applying the search box, an
+/// Excel-style column value filter, or the per-column filter row all fall back to decoding every
+/// candidate row (PRS §8's acknowledged slower path) and run on a background thread via
+/// <see cref="IsBusy"/>-gated async methods — see <see cref="VirtualizingRowCollection"/>'s remarks
+/// for why: doing this synchronously on the UI thread is what caused input to go missing while a
+/// filter was computing.
 /// </summary>
 public sealed class GridViewModel : ObservableObject
 {
@@ -27,6 +30,7 @@ public sealed class GridViewModel : ObservableObject
     private string _columnSearchText = string.Empty;
     private string? _currentSortColumn;
     private SortDirection _currentSortDirection = SortDirection.Ascending;
+    private bool _isBusy;
 
     public GridViewModel(FileViewerSession session)
     {
@@ -41,28 +45,56 @@ public sealed class GridViewModel : ObservableObject
             OnPropertyChanged(nameof(TotalRowCount));
             OnPropertyChanged(nameof(CanGoToPreviousPage));
             OnPropertyChanged(nameof(CanGoToNextPage));
+            RebuildActiveFilterChips();
         };
         ColumnNames = session.FileIndex.Header.ColumnNames;
         Columns = new ObservableCollection<GridColumnInfo>(
             ColumnNames.Select((name, index) => new GridColumnInfo(name, index) { IsVisible = index < DefaultVisibleColumnCount }));
 
-        ClearSortCommand = RelayCommand.Create(ClearSort, () => CurrentSortColumn is not null);
-        AddRowCommand = RelayCommand.Create(AddRow);
-        DuplicateSelectedRowCommand = RelayCommand.Create(DuplicateSelectedRow, () => SelectedRow is not null);
-        DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => Selection.Count > 0);
-        UndoCommand = RelayCommand.Create(() => { Session.Overlay.Undo(); Rows.Invalidate(); }, () => Session.Overlay.CanUndo);
+        ClearSortCommand = RelayCommand.Create(ClearSort, () => CurrentSortColumn is not null && !IsBusy);
+        AddRowCommand = RelayCommand.Create(AddRow, () => !IsBusy);
+        DuplicateSelectedRowCommand = RelayCommand.Create(DuplicateSelectedRow, () => SelectedRow is not null && !IsBusy);
+        DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => Selection.Count > 0 && !IsBusy);
+        UndoCommand = RelayCommand.Create(() => { Session.Overlay.Undo(); Rows.Invalidate(); }, () => Session.Overlay.CanUndo && !IsBusy);
 
-        ApplySearchCommand = RelayCommand.Create(() => Rows.ApplyFilter(SearchText));
-        ClearSearchCommand = RelayCommand.Create(() => { SearchText = string.Empty; Rows.ApplyFilter(null); });
+        ApplySearchCommand = new AsyncRelayCommand(() => RunBusyAsync(() => Rows.ApplyFilterAsync(SearchText)), () => !IsBusy);
+        ClearSearchCommand = new AsyncRelayCommand(
+            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ApplyFilterAsync(null)); }, () => !IsBusy);
+        ClearAllFiltersCommand = new AsyncRelayCommand(
+            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ClearAllFiltersAsync()); }, () => !IsBusy && HasActiveFilters);
 
-        PreviousPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex - 1), () => CanGoToPreviousPage);
-        NextPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex + 1), () => CanGoToNextPage);
+        PreviousPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex - 1), () => CanGoToPreviousPage && !IsBusy);
+        NextPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex + 1), () => CanGoToNextPage && !IsBusy);
     }
 
     public FileViewerSession Session { get; }
     public VirtualizingRowCollection Rows { get; }
     public IReadOnlyList<string> ColumnNames { get; }
     public ObservableCollection<GridColumnInfo> Columns { get; }
+
+    /// <summary>
+    /// True while a background filter/sort computation is in flight. Bound to disable the
+    /// controls that would start another one (or an edit that would race with it) — not a hard
+    /// correctness requirement (<see cref="EditOverlay"/> and <see cref="Caching.DecodedRowCache"/>
+    /// are both safe under concurrent access regardless), just what keeps two overlapping
+    /// operations from confusing the user or clobbering each other's results.
+    /// </summary>
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set
+        {
+            if (SetField(ref _isBusy, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+
+    /// <summary>Every currently-active filter, in a form the toolbar can render as removable chips — the "what am I filtering by" summary.</summary>
+    public ObservableCollection<ActiveFilterChip> ActiveFilterChips { get; } = new();
+
+    public bool HasActiveFilters => ActiveFilterChips.Count > 0;
 
     /// <summary>Name of the column the grid is currently sorted by, or null if unsorted (file order). Drives the header sort-arrow indicator in code-behind.</summary>
     public string? CurrentSortColumn
@@ -123,12 +155,15 @@ public sealed class GridViewModel : ObservableObject
     public ICommand UndoCommand { get; }
     public ICommand ApplySearchCommand { get; }
     public ICommand ClearSearchCommand { get; }
+    public ICommand ClearAllFiltersCommand { get; }
     public ICommand PreviousPageCommand { get; }
     public ICommand NextPageCommand { get; }
 
-    /// <summary>Invoked from the DataGrid's Sorting event (column header click). Toggles ascending/descending on repeated clicks of the same column.</summary>
-    public void SortByColumn(string columnName)
+    /// <summary>Invoked from the DataGrid's Sorting event (column header click). Toggles ascending/descending on repeated clicks of the same column. No-ops while <see cref="IsBusy"/> — the caller (MainWindow) doesn't need its own guard.</summary>
+    public async Task SortByColumnAsync(string columnName)
     {
+        if (IsBusy) return;
+
         SortDirection direction = columnName == CurrentSortColumn && CurrentSortDirection == SortDirection.Ascending
             ? SortDirection.Descending
             : SortDirection.Ascending;
@@ -140,15 +175,18 @@ public sealed class GridViewModel : ObservableObject
         }
         else
         {
-            Session.ClearSort();
-            List<long> candidates = CollectBaseAndAddedRowIndices();
-            List<long> sorted = RowSorter.SortByColumn(candidates, columnName, direction, Session.FileIndex, Session.Overlay, Session.Cache);
-            Rows.ApplyCustomOrder([.. sorted]);
+            await RunBusyAsync(async () =>
+            {
+                Session.ClearSort();
+                List<long> candidates = CollectBaseAndAddedRowIndices();
+                List<long> sorted = await Task.Run(
+                    () => RowSorter.SortByColumn(candidates, columnName, direction, Session.FileIndex, Session.Overlay, Session.Cache));
+                Rows.ApplyCustomOrder([.. sorted]);
+            });
         }
 
         CurrentSortColumn = columnName;
         CurrentSortDirection = direction;
-        Rows.Invalidate();
     }
 
     public void ClearSort()
@@ -156,7 +194,79 @@ public sealed class GridViewModel : ObservableObject
         Session.ClearSort();
         Rows.ClearCustomOrder();
         CurrentSortColumn = null;
-        Rows.Invalidate();
+    }
+
+    /// <summary>Sets (or clears) the ag-Grid-style per-column filter row's pattern for one column. No-ops while <see cref="IsBusy"/> — a fast-typing user's earlier keystroke won't be applied out of order after a later one.</summary>
+    public Task SetColumnPatternFilterAsync(string columnName, string? pattern, bool useRegex) =>
+        IsBusy ? Task.CompletedTask : RunBusyAsync(() => Rows.SetColumnPatternFilterAsync(columnName, pattern, useRegex));
+
+    /// <summary>Sets (or clears) an Excel-style column value filter. No-ops while <see cref="IsBusy"/>.</summary>
+    public Task SetColumnValueFilterAsync(string columnName, HashSet<string>? allowedValues) =>
+        IsBusy ? Task.CompletedTask : RunBusyAsync(() => Rows.SetColumnValueFilterAsync(columnName, allowedValues));
+
+    /// <summary>
+    /// Every distinct value a column takes, for the Excel-style filter popup — decodes every
+    /// candidate row on a background thread. Returns an empty list (rather than running) while
+    /// <see cref="IsBusy"/>; the caller (the popup) is expected to already be blocked from opening
+    /// a second lookup in that state, this is just a safety net.
+    /// </summary>
+    public Task<List<string>> GetDistinctValuesForColumnAsync(string columnName) =>
+        IsBusy ? Task.FromResult(new List<string>()) : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName));
+
+    /// <summary>Runs a background filter/sort computation with <see cref="IsBusy"/> set for its duration.</summary>
+    private async Task RunBusyAsync(Func<Task> operation)
+    {
+        IsBusy = true;
+        try
+        {
+            await operation();
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>Same as <see cref="RunBusyAsync(Func{Task})"/> but for an operation that returns a value.</summary>
+    private async Task<T> RunBusyAsync<T>(Func<Task<T>> operation)
+    {
+        IsBusy = true;
+        try
+        {
+            return await operation();
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private void RebuildActiveFilterChips()
+    {
+        ActiveFilterChips.Clear();
+
+        if (!string.IsNullOrEmpty(Rows.CurrentSearchText))
+        {
+            ActiveFilterChips.Add(new ActiveFilterChip(
+                $"Search: \"{Rows.CurrentSearchText}\"",
+                () => RunBusyAsync(() => { SearchText = string.Empty; return Rows.ApplyFilterAsync(null); })));
+        }
+
+        foreach ((string columnName, HashSet<string> allowedValues) in Rows.ColumnValueFilters)
+        {
+            ActiveFilterChips.Add(new ActiveFilterChip(
+                $"{columnName}: {allowedValues.Count} selected",
+                () => RunBusyAsync(() => Rows.SetColumnValueFilterAsync(columnName, null))));
+        }
+
+        foreach ((string columnName, ColumnPatternFilter filter) in Rows.ColumnPatternFilters)
+        {
+            string label = filter.UseRegex ? $"{columnName} ~ /{filter.Pattern}/" : $"{columnName}: \"{filter.Pattern}\"";
+            ActiveFilterChips.Add(new ActiveFilterChip(
+                label, () => RunBusyAsync(() => Rows.SetColumnPatternFilterAsync(columnName, null, filter.UseRegex))));
+        }
+
+        OnPropertyChanged(nameof(HasActiveFilters));
     }
 
     private List<long> CollectBaseAndAddedRowIndices()
@@ -166,13 +276,7 @@ public sealed class GridViewModel : ObservableObject
         {
             candidates.Add(Session.CurrentOrder[i].RowIndex);
         }
-        foreach (RowOp op in Session.Overlay.RowOps)
-        {
-            if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && Session.Overlay.GetRowState(op.RowIndex) != RowState.Deleted)
-            {
-                candidates.Add(op.RowIndex);
-            }
-        }
+        candidates.AddRange(Session.Overlay.GetLiveAddedOrDuplicatedRowIndices());
         return candidates;
     }
 
@@ -221,4 +325,11 @@ public sealed class GridViewModel : ObservableObject
         Selection.SetSelected(rowIndex, false);
         Rows.Invalidate();
     }
+}
+
+/// <summary>One entry in <see cref="GridViewModel.ActiveFilterChips"/> — a human-readable description of an active filter, plus the command that clears just that one filter.</summary>
+public sealed class ActiveFilterChip(string label, Func<Task> remove)
+{
+    public string Label { get; } = label;
+    public ICommand RemoveCommand { get; } = new AsyncRelayCommand(remove);
 }

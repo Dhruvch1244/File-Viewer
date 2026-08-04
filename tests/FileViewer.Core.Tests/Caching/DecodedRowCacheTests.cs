@@ -114,4 +114,38 @@ public class DecodedRowCacheTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new DecodedRowCache(capacity: 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => new DecodedRowCache(capacity: -1));
     }
+
+    [Fact]
+    public void ConcurrentGetAndSet_DoNotCorruptState()
+    {
+        // Rows are resolved (and therefore cached) from a background thread (arbitrary-column
+        // sort/filter) while the UI thread keeps rendering the page on screen — both can genuinely
+        // touch the same cache instance at once. This doesn't assert exact interleaving; it asserts
+        // that running both concurrently never throws, and the cache stays internally consistent
+        // (Count never exceeds capacity even under concurrent eviction).
+        var cache = new DecodedRowCache(capacity: 64);
+        const int iterations = 5000;
+
+        Task writer = Task.Run(() =>
+        {
+            for (int i = 0; i < iterations; i++)
+            {
+                cache.Set(i, MakeRow(i));
+            }
+        });
+
+        Task reader = Task.Run(() =>
+        {
+            for (int i = 0; i < iterations; i++)
+            {
+                cache.TryGet(i % 100, out _);
+                _ = cache.Count;
+            }
+        });
+
+        var exception = Record.Exception(() => Task.WaitAll(writer, reader));
+
+        Assert.Null(exception);
+        Assert.True(cache.Count <= 64);
+    }
 }

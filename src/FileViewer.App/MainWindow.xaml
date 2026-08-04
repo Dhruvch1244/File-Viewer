@@ -203,6 +203,39 @@
                 </DockPanel>
             </Border>
 
+            <!-- ============================== Active filters summary ================== -->
+            <!-- "What am I filtering by" — every active search/column-value/column-pattern filter
+                 as a removable chip, so it's never a mystery why fewer rows are showing. -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding Grid.HasActiveFilters, Converter={StaticResource BoolToVisibilityConverter}}">
+                <DockPanel Margin="16,8">
+                    <TextBlock DockPanel.Dock="Left" Text="FILTERED BY" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <Button DockPanel.Dock="Right" Content="Clear all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12"
+                            Command="{Binding Grid.ClearAllFiltersCommand}" VerticalAlignment="Center" />
+                    <ItemsControl ItemsSource="{Binding Grid.ActiveFilterChips}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{DynamicResource CanvasBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                        CornerRadius="12" Padding="8,3" Margin="0,0,8,4">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Label}" FontSize="11.5" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                        <Button Content="✕" Command="{Binding RemoveCommand}" Margin="6,0,0,0"
+                                                Style="{StaticResource ToolbarButtonStyle}" Padding="2,0" FontSize="10"
+                                                VerticalAlignment="Center" ToolTip="Remove this filter" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </DockPanel>
+            </Border>
+
             <!-- ============================== Status bar ============================= -->
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,10">
@@ -217,8 +250,13 @@
             <!-- ============================== Pagination bar ========================== -->
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,8">
-                    <TextBlock Text="{Binding Grid.TotalRowCount, StringFormat='{}{0:N0} record(s)'}"
-                               Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Grid.TotalRowCount, StringFormat='{}{0:N0} record(s)'}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                        <TextBlock Text="Filtering…" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
+                                   Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Button Content="‹ Previous" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.PreviousPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
@@ -396,6 +434,11 @@
                         <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
                         <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
                     </StackPanel>
+                    <!-- Shown from the moment the popup opens until the (background) distinct-value
+                         lookup finishes — the popup is fully open and interactive immediately, it
+                         just doesn't have values to show yet, instead of freezing until it does. -->
+                    <TextBlock x:Name="ColumnFilterLoadingText" DockPanel.Dock="Top" Text="Loading values…" FontSize="12"
+                               FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl x:Name="ColumnFilterValuesList">
                             <ItemsControl.ItemTemplate>

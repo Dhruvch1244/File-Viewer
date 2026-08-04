@@ -73,12 +73,9 @@ public sealed class FileViewerSession : IDisposable
             yield return order[i].RowIndex;
         }
 
-        foreach (RowOp op in Overlay.RowOps)
+        foreach (long rowIndex in Overlay.GetLiveAddedOrDuplicatedRowIndices())
         {
-            if ((op.Type is RowOpType.Add or RowOpType.Duplicate) && Overlay.GetRowState(op.RowIndex) != RowState.Deleted)
-            {
-                yield return op.RowIndex;
-            }
+            yield return rowIndex;
         }
     }
 

@@ -138,4 +138,84 @@ public class RowFilterTests
 
         Assert.Equal([2L], result); // row 0 matched the value but is deleted
     }
+
+    [Fact]
+    public async Task FilterByColumnPattern_SubstringMode_MatchesCaseInsensitively()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<long> result = RowFilter.FilterByColumnPattern(
+            [0, 1, 2], "_ID", "sec002", useRegex: false, index, overlay, cache);
+
+        Assert.Equal([1L], result);
+    }
+
+    [Fact]
+    public async Task FilterByColumnPattern_RegexMode_MatchesPattern()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        // PRICE values: 100.50, 101.25, 99.75 — only two start with "10".
+        List<long> result = RowFilter.FilterByColumnPattern(
+            [0, 1, 2], "PRICE", "^10", useRegex: true, index, overlay, cache);
+
+        Assert.Equal([0L, 1L], result);
+    }
+
+    [Fact]
+    public async Task FilterByColumnPattern_InvalidRegex_ReturnsNoMatchesRatherThanThrowing()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<long> result = RowFilter.FilterByColumnPattern(
+            [0, 1, 2], "_ID", "(unclosed", useRegex: true, index, overlay, cache);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task FilterByColumnPattern_EmptyPattern_ReturnsAllRowsUnchanged()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        List<long> result = RowFilter.FilterByColumnPattern(
+            [0, 1, 2], "_ID", "", useRegex: true, index, overlay, cache);
+
+        Assert.Equal([0L, 1L, 2L], result);
+    }
+
+    [Fact]
+    public async Task FilterByColumnPattern_SkipsDeletedRows()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        overlay.DeleteRow(0);
+
+        List<long> result = RowFilter.FilterByColumnPattern(
+            [0, 1, 2], "_ID", "SEC", useRegex: false, index, overlay, cache);
+
+        Assert.Equal([1L, 2L], result);
+    }
+
+    [Theory]
+    [InlineData("^SEC00[12]$", true)]
+    [InlineData("(unclosed", false)]
+    [InlineData("[", false)]
+    public void TryCompileRegex_ReportsWhetherPatternIsValid(string pattern, bool expectedValid)
+    {
+        bool valid = RowFilter.TryCompileRegex(pattern, out System.Text.RegularExpressions.Regex? regex, out string? error);
+
+        Assert.Equal(expectedValid, valid);
+        Assert.Equal(expectedValid, regex is not null);
+        Assert.Equal(!expectedValid, error is not null);
+    }
 }
