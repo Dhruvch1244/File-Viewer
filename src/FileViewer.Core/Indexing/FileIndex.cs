@@ -60,6 +60,32 @@ public sealed class FileIndex : IDisposable
         return buffer;
     }
 
+    /// <summary>
+    /// Copies <paramref name="length"/> bytes starting at <paramref name="offset"/> straight from the
+    /// source file to <paramref name="destination"/>, unchanged. Used by <see cref="Export.DifExporter"/>
+    /// to reproduce header/trailer bytes byte-for-byte instead of reconstructing them from parsed
+    /// metadata, so anything the parser doesn't fully model (exact spacing, an unrecognized line, a
+    /// stale DATARECORDS count, ...) still survives a round trip untouched.
+    /// </summary>
+    public void CopyRangeTo(Stream destination, long offset, long length)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (length <= 0) return;
+
+        byte[] buffer = new byte[(int)Math.Min(length, 1 << 20)];
+        long remaining = length;
+        long position = offset;
+        while (remaining > 0)
+        {
+            int chunkSize = (int)Math.Min(remaining, buffer.Length);
+            int read = RandomAccessReader.ReadExactly(_fileHandle, buffer.AsSpan(0, chunkSize), position);
+            if (read == 0) break; // source file ended early (shouldn't happen; nothing more to copy)
+            destination.Write(buffer, 0, read);
+            position += read;
+            remaining -= read;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
