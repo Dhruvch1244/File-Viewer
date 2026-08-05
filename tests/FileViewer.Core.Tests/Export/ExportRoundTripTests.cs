@@ -44,13 +44,15 @@ public class ExportRoundTripTests
 
         ExportRunner.Export(stream, scenario.Index, scenario.Overlay, scenario.Cache,
             ExportRunner.FileOrderWithAddedRows(scenario.Index, scenario.Overlay),
-            new DifExporter(scenario.Index.Header.Delimiter));
+            new DifExporter(scenario.Index));
 
         byte[] exportedBytes = stream.ToArray();
         DifFileHeader reparsedHeader = DifHeaderParser.Parse(exportedBytes);
 
         Assert.True(reparsedHeader.IsValid);
-        Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // row0 + edited row1 + added row = 3 (row2 was deleted)
+        // Trailer is copied verbatim from minimal_valid.dif, which declares DATARECORDS=3 — same
+        // number as this scenario happens to write (row0 + edited row1 + added row, row2 deleted).
+        Assert.Equal(3, reparsedHeader.DeclaredDataRecords);
 
         var rows = new List<string[]>();
         int pos = checked((int)reparsedHeader.DataStartOffset);
@@ -68,14 +70,14 @@ public class ExportRoundTripTests
     }
 
     [Fact]
-    public async Task Dif_RoundTrip_ForHeader_PreservesEverythingOutsideTheColumnGrid()
+    public async Task Dif_RoundTrip_PreservesEverythingOutsideTheDataSection()
     {
         // bloomberg_getdata_implicit_prefix.dif carries exactly the "other stuff" that isn't a row
         // value: an IMAHDR marker (not INAHDR), a START-OF-FILE line, pre-fields metadata
         // (PROGRAMNAME/DATEFORMAT/ENCODING), post-fields metadata (TIMESTARTED, sitting between
         // END-OF-FIELDS and START-OF-DATA), and a trailer with a second key (ENDTIME) beyond
         // DATARECORDS. None of that is a column the grid displays, so it only survives an export if
-        // DifExporter.ForHeader is actually threading it through — this proves it round-trips intact.
+        // DifExporter is copying those bytes straight from the source file — this proves it does.
         using FileIndex index = await FileIndexer.IndexAsync(FixturePath("bloomberg_getdata_implicit_prefix.dif"));
         var overlay = new EditOverlay();
         var cache = new DecodedRowCache();
@@ -83,7 +85,7 @@ public class ExportRoundTripTests
 
         ExportRunner.Export(stream, index, overlay, cache,
             ExportRunner.FileOrderWithAddedRows(index, overlay),
-            DifExporter.ForHeader(index.Header));
+            new DifExporter(index));
 
         byte[] exportedBytes = stream.ToArray();
         DifFileHeader reparsedHeader = DifHeaderParser.Parse(exportedBytes);
@@ -96,13 +98,13 @@ public class ExportRoundTripTests
         Assert.Equal("UTF-8", reparsedHeader.HeaderMetadata["ENCODING"]);
         Assert.Equal("Thu Jul 23 18:30:54 EDT 2026", reparsedHeader.PostFieldsMetadata["TIMESTARTED"]);
         Assert.Equal("Thu Jul 23 18:31:02 EDT 2026", reparsedHeader.TrailerMetadata["ENDTIME"]);
-        Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // recomputed from the actual exported rows, not copied verbatim
+        Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // copied verbatim from the source file's own DATARECORDS=3
         Assert.Equal(DifFormatOptions.Trailer, reparsedHeader.TrailerMarker); // this fixture's trailer is plain INATRL, no END-OF-FILE
         Assert.False(reparsedHeader.HasFileEndMarker);
     }
 
     [Fact]
-    public async Task Dif_RoundTrip_ForHeader_PreservesImatrlTrailerMarkerAndEndOfFileLine()
+    public async Task Dif_RoundTrip_PreservesImatrlTrailerMarkerAndEndOfFileLine()
     {
         // real_world_trailer_before_end_of_file.dif uses the OTHER real trailer shape: IMATRL (not
         // INATRL) as the closing marker, with an END-OF-FILE line right before it — both must
@@ -114,7 +116,7 @@ public class ExportRoundTripTests
 
         ExportRunner.Export(stream, index, overlay, cache,
             ExportRunner.FileOrderWithAddedRows(index, overlay),
-            DifExporter.ForHeader(index.Header));
+            new DifExporter(index));
 
         byte[] exportedBytes = stream.ToArray();
         DifFileHeader reparsedHeader = DifHeaderParser.Parse(exportedBytes);
@@ -123,7 +125,45 @@ public class ExportRoundTripTests
         Assert.Equal(DifFormatOptions.TrailerAlt, reparsedHeader.TrailerMarker);
         Assert.True(reparsedHeader.HasFileEndMarker);
         Assert.Equal("Thu Jul 23 19:08:48 EDT 2026", reparsedHeader.TrailerMetadata["TIMEFINISHED"]);
-        Assert.Equal(3, reparsedHeader.DeclaredDataRecords); // recomputed from the actual exported rows
+        // This fixture's DATARECORDS=22617 is already stale against its own 3 data rows — copied
+        // verbatim rather than "corrected", exactly as a since-edited file's trailer would be.
+        Assert.Equal(22617, reparsedHeader.DeclaredDataRecords);
+    }
+
+    [Fact]
+    public async Task Dif_RoundTrip_PreservesDataRecordsVerbatimEvenWhenEditsMakeItStale()
+    {
+        // minimal_valid.dif declares DATARECORDS=3. Deleting two of its three rows means only one
+        // row is actually written back out — but the trailer is copied byte-for-byte from the
+        // source file, so the now-stale DATARECORDS=3 must survive untouched, not get "corrected"
+        // to 1. Only the bytes between START-OF-DATA and END-OF-DATA are ever regenerated.
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+        overlay.DeleteRow(1);
+        overlay.DeleteRow(2);
+        using var stream = new MemoryStream();
+
+        ExportRunner.Export(stream, index, overlay, cache,
+            ExportRunner.FileOrderWithAddedRows(index, overlay),
+            new DifExporter(index));
+
+        byte[] exportedBytes = stream.ToArray();
+        DifFileHeader reparsedHeader = DifHeaderParser.Parse(exportedBytes);
+
+        Assert.True(reparsedHeader.IsValid);
+        Assert.Equal(3, reparsedHeader.DeclaredDataRecords);
+
+        var rows = new List<string[]>();
+        int pos = checked((int)reparsedHeader.DataStartOffset);
+        int end = checked((int)reparsedHeader.DataEndOffsetExclusive);
+        while (pos < end && DifLineScanner.TryReadLine(exportedBytes.AsSpan()[..end], ref pos, out ReadOnlySpan<byte> line))
+        {
+            if (DifLineScanner.TrimTrailingCr(line).Length == 0) continue;
+            rows.Add(DifRowParser.ParseRow(line, (byte)reparsedHeader.Delimiter, DifFormatOptions.TextEncoding));
+        }
+
+        Assert.Single(rows); // only row0 survives the two deletes, despite DATARECORDS still reading 3
     }
 
     [Fact]
@@ -197,7 +237,7 @@ public class ExportRoundTripTests
         using Scenario scenario = await BuildMixedOverlayScenarioAsync();
         using var stream = new MemoryStream();
         IRowExporter exporter = exporterType == typeof(DifExporter)
-            ? new DifExporter(scenario.Index.Header.Delimiter)
+            ? new DifExporter(scenario.Index)
             : (IRowExporter)Activator.CreateInstance(exporterType)!;
 
         ExportRunner.Export(stream, scenario.Index, scenario.Overlay, scenario.Cache,

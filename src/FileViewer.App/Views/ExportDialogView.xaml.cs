@@ -109,7 +109,7 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
 
     private IRowExporter CreateExporter(ExportFormatKind format) => format switch
     {
-        ExportFormatKind.Dif => DifExporter.ForHeader(_session.FileIndex.Header),
+        ExportFormatKind.Dif => new DifExporter(_session.FileIndex),
         ExportFormatKind.Csv => new CsvExporter(),
         ExportFormatKind.Tsv => new TsvExporter(),
         ExportFormatKind.Json => new JsonExporter(),
