@@ -2,9 +2,11 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ============================== Dark palette ==============================
-         Mirrors Colors.Light.xaml key-for-key. The accent button flips to a light
-         chip on dark surfaces (AccentDarkBrush/TextOnAccentBrush swap roles) so it
-         still reads as the primary action rather than disappearing into the canvas. -->
+         Mirrors Colors.Light.xaml key-for-key. The accent carries the same Fidelity
+         green identity as the light theme, tuned to a brighter emerald so it still
+         reads clearly against a dark surface — with dark (not white) text on top of
+         it, since the accent itself is light/saturated enough to need the contrast
+         the other way around. -->
     <SolidColorBrush x:Key="CanvasBrush" Color="#1A1A1A" />
     <SolidColorBrush x:Key="SurfaceBrush" Color="#242424" />
     <SolidColorBrush x:Key="BorderBrush" Color="#3A3A3A" />
@@ -12,8 +14,8 @@
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="#EDEDED" />
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="#9B9B98" />
     <SolidColorBrush x:Key="TextOnAccentBrush" Color="#111111" />
-    <SolidColorBrush x:Key="AccentDarkBrush" Color="#EDEDED" />
-    <SolidColorBrush x:Key="AccentDarkHoverBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="AccentDarkBrush" Color="#2FBB80" />
+    <SolidColorBrush x:Key="AccentDarkHoverBrush" Color="#4FD69A" />
     <SolidColorBrush x:Key="HoverBackgroundBrush" Color="#2E2E2E" />
     <SolidColorBrush x:Key="SelectionBackgroundBrush" Color="#123047" />
     <SolidColorBrush x:Key="ScrollThumbBrush" Color="#565656" />

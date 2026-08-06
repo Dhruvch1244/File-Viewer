@@ -2,24 +2,26 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ============================== Light palette ==============================
-         Warm monochrome canvas + ultra-light borders + desaturated pastel
-         accents for semantic row states. Text is never pure black/white.
-         Keys here must match Colors.Dark.xaml exactly — Theme.xaml's styles
-         reference them via DynamicResource so swapping which of these two
-         dictionaries is merged into Application.Resources re-themes the
-         whole app live, without touching any style/template. -->
-    <SolidColorBrush x:Key="CanvasBrush" Color="#FBFBFA" />
+         Fidelity Investments green brand palette: deep pyramid-green accent
+         (#00694A) on a warm, faintly sage-tinted canvas, with ultra-light
+         borders and desaturated pastel accents for semantic row states. Text
+         is never pure black/white. Keys here must match Colors.Dark.xaml
+         exactly — Theme.xaml's styles reference them via DynamicResource so
+         swapping which of these two dictionaries is merged into
+         Application.Resources re-themes the whole app live, without
+         touching any style/template. -->
+    <SolidColorBrush x:Key="CanvasBrush" Color="#F6F9F7" />
     <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="BorderBrush" Color="#EAEAEA" />
-    <SolidColorBrush x:Key="BorderStrongBrush" Color="#DADAD8" />
-    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#2F3437" />
-    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#787774" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#E3E9E5" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="#C9D4CD" />
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#172420" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#62716A" />
     <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="AccentDarkBrush" Color="#111111" />
-    <SolidColorBrush x:Key="AccentDarkHoverBrush" Color="#333333" />
-    <SolidColorBrush x:Key="HoverBackgroundBrush" Color="#F3F3F2" />
-    <SolidColorBrush x:Key="SelectionBackgroundBrush" Color="#E1F3FE" />
-    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#C7C7C4" />
+    <SolidColorBrush x:Key="AccentDarkBrush" Color="#00694A" />
+    <SolidColorBrush x:Key="AccentDarkHoverBrush" Color="#00835D" />
+    <SolidColorBrush x:Key="HoverBackgroundBrush" Color="#EEF5F1" />
+    <SolidColorBrush x:Key="SelectionBackgroundBrush" Color="#E3EFE8" />
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#B7C6BD" />
 
     <SolidColorBrush x:Key="PaleRedBrush" Color="#FDEBEC" />
     <SolidColorBrush x:Key="PaleRedTextBrush" Color="#9F2F2D" />

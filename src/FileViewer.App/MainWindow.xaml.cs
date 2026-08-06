@@ -486,9 +486,16 @@ public partial class MainWindow : Window
         ICollectionView view = CollectionViewSource.GetDefaultView(_activeFilterOptions);
         _activeFilterOptionsView = view;
         ColumnFilterValuesList.ItemsSource = view;
+
+        // The search box was interactive the whole time the values were loading — if the user
+        // typed into it before this point, that text was silently ignored (no view existed yet to
+        // filter). Apply whatever it currently holds now that there's finally a view to apply it to.
+        ApplyColumnFilterSearch();
     }
 
-    private void OnColumnFilterSearchChanged(object sender, TextChangedEventArgs e)
+    private void OnColumnFilterSearchChanged(object sender, TextChangedEventArgs e) => ApplyColumnFilterSearch();
+
+    private void ApplyColumnFilterSearch()
     {
         if (_activeFilterOptionsView is null) return;
         string text = ColumnFilterSearchBox.Text;
