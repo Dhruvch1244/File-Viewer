@@ -1,12 +1,14 @@
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using FileViewer.App.Collections;
 using FileViewer.App.ViewModels;
@@ -34,6 +36,9 @@ public partial class MainWindow : Window
 
     /// <summary>The ag-Grid-style per-column filter TextBox for each data column, keyed by column name — used to sync a box's displayed text back to empty when its filter is cleared some other way (a chip's "×", "Clear all").</summary>
     private readonly Dictionary<string, TextBox> _columnFilterBoxes = new();
+
+    /// <summary>The 3 bars of each data column's header "menu" icon (see <see cref="BuildColumnMenuIcon"/>) — recolored to the accent brush by <see cref="UpdateColumnHeaderText"/> while that column has an active Excel-style value filter, mirroring the "●" text indicator.</summary>
+    private readonly Dictionary<string, Rectangle[]> _columnMenuIconBars = new();
 
     private readonly Dictionary<TextBox, DispatcherTimer> _filterDebounceTimers = new();
 
@@ -144,30 +149,25 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// A single click on a column header opens its value-filter popup; a double-click sorts by it
-    /// instead. Intercepting on Preview (mouse-down, before the header's own click/Sorting
-    /// machinery runs) and marking the event handled suppresses WPF's built-in header-click sort
-    /// entirely, so single-click never fires it. Clicks that land inside the header's own filter
-    /// TextBox (the ag-Grid-style filter row) are left completely alone — that box needs normal
-    /// text-editing mouse behavior, not sort/popup interception.
+    /// A single click on a column header sorts by it. Intercepting on Preview (mouse-down, before
+    /// the header's own click/Sorting machinery runs) and marking the event handled suppresses
+    /// WPF's built-in header-click sort entirely — it operates on an ICollectionView the grid's
+    /// custom virtualized backing collection doesn't provide, so it wouldn't actually do anything —
+    /// replacing it with the async, custom-collection-aware sort path instead. Clicks that land
+    /// inside the header's own filter TextBox (the ag-Grid-style filter row) or its column-menu
+    /// Button (see OnColumnMenuButtonClick) are left completely alone, so those controls get their
+    /// own normal mouse behavior instead of being reinterpreted as a sort click.
     /// </summary>
     private async void OnDataGridPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (FindAncestor<TextBox>(e.OriginalSource as DependencyObject) is not null) return;
+        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null) return;
         if (FindAncestor<DataGridColumnHeader>(e.OriginalSource as DependencyObject) is not { } header) return;
         if (header.Column?.SortMemberPath is not { Length: > 0 } columnName) return;
         if (_viewModel.Grid is not { } grid) return;
 
         e.Handled = true;
-
-        if (e.ClickCount >= 2)
-        {
-            await grid.SortByColumnAsync(columnName);
-        }
-        else
-        {
-            RequestOpenColumnFilterPopup(columnName, header, grid);
-        }
+        await grid.SortByColumnAsync(columnName);
     }
 
     private void RebuildColumns()
@@ -178,6 +178,7 @@ public partial class MainWindow : Window
         _filterDebounceTimers.Clear();
         _columnHeaderTextBlocks.Clear();
         _columnFilterBoxes.Clear();
+        _columnMenuIconBars.Clear();
         _suppressFilterTextChanged.Clear();
 
         if (_viewModel.Grid is not { } grid) return;
@@ -223,8 +224,38 @@ public partial class MainWindow : Window
             {
                 Text = HeaderTextFor(columnName, isFiltered: false),
                 TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
             };
             _columnHeaderTextBlocks[columnName] = headerText;
+
+            // The ag-Grid-style "menu" button: the sole way to open this column's Excel-style
+            // value-filter popup (see OnColumnMenuButtonClick for why a dedicated Button, rather
+            // than intercepting the header's own click, is what actually fixes the popup
+            // open-then-instantly-close bug).
+            (Viewbox menuIcon, Rectangle[] menuIconBars) = BuildColumnMenuIcon();
+            _columnMenuIconBars[columnName] = menuIconBars;
+            var menuButton = new Button
+            {
+                Content = menuIcon,
+                Width = 20,
+                Height = 20,
+                Padding = new Thickness(0),
+                Margin = new Thickness(6, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Cursor = Cursors.Hand,
+                Tag = columnName,
+                ToolTip = "Filter this column by value",
+            };
+            AutomationProperties.SetName(menuButton, $"Filter {columnName}");
+            menuButton.Click += OnColumnMenuButtonClick;
+
+            var headerTopRow = new Grid();
+            headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(headerText, 0);
+            Grid.SetColumn(menuButton, 1);
+            headerTopRow.Children.Add(headerText);
+            headerTopRow.Children.Add(menuButton);
 
             var filterBox = new TextBox
             {
@@ -236,7 +267,7 @@ public partial class MainWindow : Window
             _columnFilterBoxes[columnName] = filterBox;
 
             var headerPanel = new StackPanel { Orientation = Orientation.Vertical };
-            headerPanel.Children.Add(headerText);
+            headerPanel.Children.Add(headerTopRow);
             headerPanel.Children.Add(filterBox);
 
             var column = new DataGridTextColumn
@@ -315,6 +346,31 @@ public partial class MainWindow : Window
 
     private static string HeaderTextFor(string columnName, bool isFiltered) =>
         isFiltered ? $"{columnName.ToUpperInvariant()}  ●" : columnName.ToUpperInvariant();
+
+    /// <summary>
+    /// A small hand-drawn 3-bar "hamburger" icon, matching the hand-drawn Path/Shape glyphs used
+    /// elsewhere (the row View/Delete buttons) rather than an icon font. Built fresh per column
+    /// (WPF visuals can only have one parent) with its bars exposed separately so the caller can
+    /// keep a reference and recolor them later without rebuilding the whole icon.
+    /// </summary>
+    private static (Viewbox Icon, Rectangle[] Bars) BuildColumnMenuIcon()
+    {
+        Rectangle[] bars = [MakeBar(5), MakeBar(11), MakeBar(17)];
+        var canvas = new Canvas { Width = 24, Height = 24 };
+        foreach (Rectangle bar in bars) canvas.Children.Add(bar);
+
+        var icon = new Viewbox { Width = 11, Height = 11, Stretch = Stretch.Uniform, Child = canvas };
+        return (icon, bars);
+
+        static Rectangle MakeBar(double top)
+        {
+            var bar = new Rectangle { Width = 20, Height = 2.6, RadiusX = 1.3, RadiusY = 1.3 };
+            bar.SetResourceReference(Shape.FillProperty, "TextSecondaryBrush");
+            Canvas.SetLeft(bar, 2);
+            Canvas.SetTop(bar, top);
+            return bar;
+        }
+    }
 
     // ============================== ag-Grid-style per-column filter row ==============================
 
@@ -416,28 +472,33 @@ public partial class MainWindow : Window
 
     // ============================== Column value filter (Excel-style) ==============================
 
-    /// <summary>Right-click anywhere in a column header also opens its value-filter popup — kept as a secondary path alongside the primary single-click gesture. Also leaves filter-box clicks alone, same as the left-button handler.</summary>
-    private void OnDataGridPreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    /// <summary>
+    /// The per-column "menu" button (the small hamburger icon in the header, built by
+    /// <see cref="BuildColumnMenuIcon"/>) is the sole way to open the Excel-style value-filter
+    /// popup, and it toggles: clicking it again while its own column's popup is already open closes
+    /// it instead of reopening. This used to be a single click anywhere on the header, opened by
+    /// deferring past the header's own mouse-down capture handling — but opening a
+    /// StaysOpen="False" Popup synchronously inside the same mouse-down that also drives an
+    /// ancestor ButtonBase's (the header's) own press/capture state meant the popup saw that
+    /// capture loss as "clicked outside" and closed itself an instant after opening: the classic
+    /// "have to hold the mouse down to see it" symptom. A plain Button.Click fires cleanly after
+    /// mouse-up, once WPF's own capture handling for that click has already settled, so routing the
+    /// open through this independent Button (excluded from the header's own click handling — see
+    /// OnDataGridPreviewMouseLeftButtonDown) sidesteps the race entirely instead of racing it.
+    /// </summary>
+    private void OnColumnMenuButtonClick(object sender, RoutedEventArgs e)
     {
-        if (FindAncestor<TextBox>(e.OriginalSource as DependencyObject) is not null) return;
-        if (FindAncestor<DataGridColumnHeader>(e.OriginalSource as DependencyObject) is not { } header) return;
-        if (header.Column?.SortMemberPath is not { Length: > 0 } columnName) return;
+        if (sender is not Button { Tag: string columnName } button) return;
         if (_viewModel.Grid is not { } grid) return;
 
-        e.Handled = true;
-        RequestOpenColumnFilterPopup(columnName, header, grid);
-    }
+        if (ColumnFilterPopup.IsOpen && _activeFilterColumn == columnName)
+        {
+            ColumnFilterPopup.IsOpen = false;
+            return;
+        }
 
-    /// <summary>
-    /// Opening the Popup synchronously inside the same mouse-down that triggers it collides with
-    /// the column header's own mouse capture for its pressed/click visual state — the header only
-    /// releases capture once this mouse-down finishes bubbling, and the Popup (StaysOpen="False")
-    /// reads that capture loss as "clicked outside" and closes itself an instant after opening.
-    /// Deferring to a low dispatcher priority runs this after the current input cycle (mouse-down
-    /// and its capture handling) has fully settled, so the popup actually stays open.
-    /// </summary>
-    private void RequestOpenColumnFilterPopup(string columnName, UIElement placementTarget, GridViewModel grid) =>
-        Dispatcher.BeginInvoke(() => OpenColumnFilterPopup(columnName, placementTarget, grid), DispatcherPriority.ContextIdle);
+        OpenColumnFilterPopup(columnName, button, grid);
+    }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
     {
@@ -546,6 +607,17 @@ public partial class MainWindow : Window
         if (_columnHeaderTextBlocks.TryGetValue(columnName, out TextBlock? headerText))
         {
             headerText.Text = HeaderTextFor(columnName, isFiltered);
+        }
+
+        // Recolors the menu icon to the accent brush while this column has an active value filter —
+        // the same at-a-glance "this is filtered" signal ag-Grid gives its own column menu icon.
+        if (_columnMenuIconBars.TryGetValue(columnName, out Rectangle[]? bars))
+        {
+            string brushKey = isFiltered ? "AccentDarkBrush" : "TextSecondaryBrush";
+            foreach (Rectangle bar in bars)
+            {
+                bar.SetResourceReference(Shape.FillProperty, brushKey);
+            }
         }
     }
 }

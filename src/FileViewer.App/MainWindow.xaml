@@ -74,9 +74,9 @@
             <Setter Property="Padding" Value="4,0" />
         </Style>
 
-        <!-- Data-column headers (not the fixed checkbox/view columns) get a hint that right-click opens the value filter, since there's no per-header icon for it. -->
+        <!-- Data-column headers (not the fixed checkbox/view columns): click the name to sort, click the menu icon to filter by value. -->
         <Style x:Key="DataColumnHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-            <Setter Property="ToolTip" Value="Click to filter by value. Double-click to sort." />
+            <Setter Property="ToolTip" Value="Click to sort. Use the menu icon to filter by value." />
         </Style>
 
         <Style x:Key="FilterValueCheckBoxStyle" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
@@ -276,7 +276,6 @@
                       ItemsSource="{Binding Grid.Rows}"
                       SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
                       PreviewMouseLeftButtonDown="OnDataGridPreviewMouseLeftButtonDown"
-                      PreviewMouseRightButtonDown="OnDataGridPreviewMouseRightButtonDown"
                       SelectionMode="Extended"
                       AutoGenerateColumns="False"
                       CanUserAddRows="False"
