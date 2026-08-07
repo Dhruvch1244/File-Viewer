@@ -13,7 +13,6 @@ using System.Windows.Threading;
 using FileViewer.App.Collections;
 using FileViewer.App.ViewModels;
 using FileViewer.App.Views;
-using FileViewer.Core.Filtering;
 using Microsoft.Win32;
 
 namespace FileViewer.App;
@@ -23,27 +22,20 @@ public partial class MainWindow : Window
     /// <summary>Number of always-present, non-data columns (select checkbox, view button, delete button) prepended to every dynamically-built column set.</summary>
     private const int FixedColumnCount = 3;
 
-    /// <summary>How long a per-column filter box waits after the last keystroke before actually applying the pattern — avoids kicking off a background decode-and-filter pass on every single character typed.</summary>
-    private static readonly TimeSpan FilterRowDebounce = TimeSpan.FromMilliseconds(300);
+    /// <summary>How long a burst of DataGrid resize events (a live window-resize drag) waits before actually recomputing the page size — avoids rebuilding the visible page on every intermediate frame of the drag.</summary>
+    private static readonly TimeSpan PageSizeDebounce = TimeSpan.FromMilliseconds(150);
 
     private readonly MainViewModel _viewModel = new();
     private string? _activeFilterColumn;
     private List<ColumnFilterValueOption> _activeFilterOptions = [];
     private ICollectionView? _activeFilterOptionsView;
+    private DispatcherTimer? _pageSizeDebounceTimer;
 
-    /// <summary>The header TextBlock for each data column — <see cref="UpdateColumnHeaderText"/> updates these directly now that <c>DataGridColumn.Header</c> is a StackPanel (text + filter box), not a plain string.</summary>
+    /// <summary>The header TextBlock for each data column — <see cref="UpdateColumnHeaderText"/> updates these directly now that <c>DataGridColumn.Header</c> is a Grid (name + menu button), not a plain string.</summary>
     private readonly Dictionary<string, TextBlock> _columnHeaderTextBlocks = new();
-
-    /// <summary>The ag-Grid-style per-column filter TextBox for each data column, keyed by column name — used to sync a box's displayed text back to empty when its filter is cleared some other way (a chip's "×", "Clear all").</summary>
-    private readonly Dictionary<string, TextBox> _columnFilterBoxes = new();
 
     /// <summary>The 3 bars of each data column's header "menu" icon (see <see cref="BuildColumnMenuIcon"/>) — recolored to the accent brush by <see cref="UpdateColumnHeaderText"/> while that column has an active Excel-style value filter, mirroring the "●" text indicator.</summary>
     private readonly Dictionary<string, Rectangle[]> _columnMenuIconBars = new();
-
-    private readonly Dictionary<TextBox, DispatcherTimer> _filterDebounceTimers = new();
-
-    /// <summary>Boxes currently being updated programmatically (see <see cref="SyncColumnFilterBoxesFromViewModel"/>) — <see cref="OnColumnFilterRowTextChanged"/> ignores changes to these so an external clear never re-triggers as if the user had typed it.</summary>
-    private readonly HashSet<TextBox> _suppressFilterTextChanged = new();
 
     public MainWindow()
     {
@@ -57,6 +49,11 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(MainViewModel.Grid))
         {
             RebuildColumns();
+            // The grid may just have gone from Collapsed (no file open) to Visible with a brand
+            // new size the DataGrid's own SizeChanged hasn't necessarily fired for yet by this
+            // point in the property-changed cycle — deferring to Loaded priority runs this once
+            // WPF has actually finished laying the now-visible grid out.
+            Dispatcher.BeginInvoke(ApplyDynamicPageSize, DispatcherPriority.Loaded);
         }
     }
 
@@ -149,37 +146,46 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// A single click on a column header sorts by it. Intercepting on Preview (mouse-down, before
-    /// the header's own click/Sorting machinery runs) and marking the event handled suppresses
-    /// WPF's built-in header-click sort entirely — it operates on an ICollectionView the grid's
-    /// custom virtualized backing collection doesn't provide, so it wouldn't actually do anything —
-    /// replacing it with the async, custom-collection-aware sort path instead. Clicks that land
-    /// inside the header's own filter TextBox (the ag-Grid-style filter row) or its column-menu
-    /// Button (see OnColumnMenuButtonClick) are left completely alone, so those controls get their
-    /// own normal mouse behavior instead of being reinterpreted as a sort click.
+    /// Recomputes how many rows fit in the DataGrid's current visible height and installs that as
+    /// the page size, so a page fills the available screen space (no dead whitespace below the last
+    /// row, no need to scroll/page through a mostly-empty page) instead of being pinned to a fixed
+    /// row count. Debounced (see <see cref="PageSizeDebounce"/>) since a live window-resize drag
+    /// fires SizeChanged continuously.
     /// </summary>
-    private async void OnDataGridPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void OnRowsDataGridSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (FindAncestor<TextBox>(e.OriginalSource as DependencyObject) is not null) return;
-        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null) return;
-        if (FindAncestor<DataGridColumnHeader>(e.OriginalSource as DependencyObject) is not { } header) return;
-        if (header.Column?.SortMemberPath is not { Length: > 0 } columnName) return;
+        _pageSizeDebounceTimer ??= new DispatcherTimer { Interval = PageSizeDebounce };
+        _pageSizeDebounceTimer.Stop();
+        _pageSizeDebounceTimer.Tick -= OnPageSizeDebounceTick;
+        _pageSizeDebounceTimer.Tick += OnPageSizeDebounceTick;
+        _pageSizeDebounceTimer.Start();
+    }
+
+    private void OnPageSizeDebounceTick(object? sender, EventArgs e)
+    {
+        _pageSizeDebounceTimer!.Stop();
+        ApplyDynamicPageSize();
+    }
+
+    private void ApplyDynamicPageSize()
+    {
         if (_viewModel.Grid is not { } grid) return;
 
-        e.Handled = true;
-        await grid.SortByColumnAsync(columnName);
+        double headerHeight = double.IsNaN(RowsDataGrid.ColumnHeaderHeight) ? 36 : RowsDataGrid.ColumnHeaderHeight;
+        double rowHeight = double.IsNaN(RowsDataGrid.RowHeight) || RowsDataGrid.RowHeight <= 0 ? 28 : RowsDataGrid.RowHeight;
+        double available = RowsDataGrid.ActualHeight - headerHeight;
+        if (available <= 0) return; // not laid out yet (e.g. no file open) — leave the current page size alone
+
+        int rowsThatFit = Math.Max(1, (int)Math.Floor(available / rowHeight));
+        grid.Rows.SetPageSize(rowsThatFit);
     }
 
     private void RebuildColumns()
     {
         RowsDataGrid.Columns.Clear();
 
-        foreach (DispatcherTimer timer in _filterDebounceTimers.Values) timer.Stop();
-        _filterDebounceTimers.Clear();
         _columnHeaderTextBlocks.Clear();
-        _columnFilterBoxes.Clear();
         _columnMenuIconBars.Clear();
-        _suppressFilterTextChanged.Clear();
 
         if (_viewModel.Grid is not { } grid) return;
 
@@ -249,30 +255,17 @@ public partial class MainWindow : Window
             AutomationProperties.SetName(menuButton, $"Filter {columnName}");
             menuButton.Click += OnColumnMenuButtonClick;
 
-            var headerTopRow = new Grid();
-            headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var headerRow = new Grid();
+            headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             Grid.SetColumn(headerText, 0);
             Grid.SetColumn(menuButton, 1);
-            headerTopRow.Children.Add(headerText);
-            headerTopRow.Children.Add(menuButton);
-
-            var filterBox = new TextBox
-            {
-                Margin = new Thickness(0, 4, 0, 0),
-                FontWeight = FontWeights.Normal,
-                ToolTip = "Filter this column. Wrap in / / for regex, e.g. /^AB/.",
-            };
-            filterBox.TextChanged += (_, _) => OnColumnFilterRowTextChanged(columnName, filterBox);
-            _columnFilterBoxes[columnName] = filterBox;
-
-            var headerPanel = new StackPanel { Orientation = Orientation.Vertical };
-            headerPanel.Children.Add(headerTopRow);
-            headerPanel.Children.Add(filterBox);
+            headerRow.Children.Add(headerText);
+            headerRow.Children.Add(menuButton);
 
             var column = new DataGridTextColumn
             {
-                Header = headerPanel,
+                Header = headerRow,
                 SortMemberPath = columnName,
                 HeaderStyle = (Style)FindResource("DataColumnHeaderStyle"),
                 Binding = new Binding($"[{i}]") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.LostFocus },
@@ -309,39 +302,11 @@ public partial class MainWindow : Window
                 case nameof(GridViewModel.FrozenColumnCount):
                     RowsDataGrid.FrozenColumnCount = FixedColumnCount + grid.FrozenColumnCount;
                     break;
-                case nameof(GridViewModel.CurrentSortColumn):
-                case nameof(GridViewModel.CurrentSortDirection):
-                    UpdateColumnSortIndicators(grid);
-                    break;
                 case nameof(GridViewModel.ColumnSearchText):
                     columnsView.Refresh();
                     break;
             }
         };
-
-        // Keeps each filter box's displayed text in sync when a filter is cleared some other way
-        // (a chip's "×", "Clear all filters") — see SyncColumnFilterBoxesFromViewModel's remarks
-        // for why a box the user is actively typing into is deliberately skipped.
-        grid.Rows.CollectionChanged += (_, _) => SyncColumnFilterBoxesFromViewModel(grid);
-    }
-
-    private void UpdateColumnSortIndicators(GridViewModel grid)
-    {
-        foreach (DataGridColumn column in RowsDataGrid.Columns)
-        {
-            string? columnName = column.SortMemberPath;
-            if (string.IsNullOrEmpty(columnName))
-            {
-                column.SortDirection = null;
-                continue;
-            }
-
-            column.SortDirection = columnName == grid.CurrentSortColumn
-                ? grid.CurrentSortDirection == Core.Sorting.SortDirection.Ascending
-                    ? ListSortDirection.Ascending
-                    : ListSortDirection.Descending
-                : null;
-        }
     }
 
     private static string HeaderTextFor(string columnName, bool isFiltered) =>
@@ -369,104 +334,6 @@ public partial class MainWindow : Window
             Canvas.SetLeft(bar, 2);
             Canvas.SetTop(bar, top);
             return bar;
-        }
-    }
-
-    // ============================== ag-Grid-style per-column filter row ==============================
-
-    /// <summary>
-    /// Debounces a filter box's keystrokes — applying the pattern on every single character would
-    /// mean kicking off a background decode-and-filter pass per keystroke, which is both wasteful
-    /// and (since each pass takes real time) prone to results arriving out of order. Restarting the
-    /// timer on every change means the pattern is only actually applied once typing pauses.
-    /// </summary>
-    private void OnColumnFilterRowTextChanged(string columnName, TextBox textBox)
-    {
-        if (_suppressFilterTextChanged.Contains(textBox)) return;
-
-        if (!_filterDebounceTimers.TryGetValue(textBox, out DispatcherTimer? timer))
-        {
-            timer = new DispatcherTimer { Interval = FilterRowDebounce };
-            _filterDebounceTimers[textBox] = timer;
-        }
-
-        timer.Stop();
-        timer.Tag = columnName;
-        timer.Tick -= OnFilterDebounceTick;
-        timer.Tick += OnFilterDebounceTick;
-        timer.Start();
-    }
-
-    private async void OnFilterDebounceTick(object? sender, EventArgs e)
-    {
-        if (sender is not DispatcherTimer timer) return;
-        timer.Stop();
-        timer.Tick -= OnFilterDebounceTick;
-
-        if (timer.Tag is not string columnName) return;
-        if (!_columnFilterBoxes.TryGetValue(columnName, out TextBox? textBox)) return;
-
-        await ApplyColumnPatternFilterAsync(columnName, textBox);
-    }
-
-    /// <summary>
-    /// Parses the box's current text ("/pattern/" is regex, anything else is a plain
-    /// case-insensitive substring), validates it if it's a regex, and — only if valid — applies it.
-    /// An invalid regex is a normal state while the user is still typing it, not an error to
-    /// silently swallow or throw: the box's border turns red and the *previous* valid filter (if
-    /// any) is left in place until the pattern becomes valid again.
-    /// </summary>
-    private async Task ApplyColumnPatternFilterAsync(string columnName, TextBox textBox)
-    {
-        if (_viewModel.Grid is not { } grid) return;
-
-        (string pattern, bool useRegex) = ParseFilterRowInput(textBox.Text);
-
-        if (useRegex && pattern.Length > 0 && !RowFilter.TryCompileRegex(pattern, out _, out _))
-        {
-            textBox.BorderBrush = (Brush)FindResource("PaleRedTextBrush");
-            textBox.BorderThickness = new Thickness(1.5);
-            return;
-        }
-
-        textBox.ClearValue(BorderBrushProperty);
-        textBox.ClearValue(BorderThicknessProperty);
-        await grid.SetColumnPatternFilterAsync(columnName, pattern, useRegex);
-    }
-
-    private static (string Pattern, bool UseRegex) ParseFilterRowInput(string rawText)
-    {
-        if (rawText.Length >= 2 && rawText[0] == '/' && rawText[^1] == '/')
-        {
-            return (rawText[1..^1], true);
-        }
-        return (rawText, false);
-    }
-
-    /// <summary>
-    /// Resyncs every filter box's displayed text to the view model's actual current filter — needed
-    /// because a filter can be cleared from somewhere other than its own box (an active-filter
-    /// chip's "×", "Clear all filters"). Skips whichever box currently has keyboard focus: that's
-    /// the box the user might still be actively typing into, and this can fire from an unrelated
-    /// change elsewhere (a different column's filter, a row being added) — overwriting live input
-    /// with the last *applied* value is exactly the "I lose my typing" bug this whole change exists
-    /// to fix, not something to reintroduce here.
-    /// </summary>
-    private void SyncColumnFilterBoxesFromViewModel(GridViewModel grid)
-    {
-        foreach ((string columnName, TextBox textBox) in _columnFilterBoxes)
-        {
-            if (textBox.IsFocused) continue;
-
-            ColumnPatternFilter? active = grid.Rows.GetColumnPatternFilter(columnName);
-            string desired = active is { } filter ? (filter.UseRegex ? $"/{filter.Pattern}/" : filter.Pattern) : string.Empty;
-            if (textBox.Text == desired) continue;
-
-            _suppressFilterTextChanged.Add(textBox);
-            textBox.Text = desired;
-            textBox.ClearValue(BorderBrushProperty);
-            textBox.ClearValue(BorderThicknessProperty);
-            _suppressFilterTextChanged.Remove(textBox);
         }
     }
 
@@ -498,16 +365,6 @@ public partial class MainWindow : Window
         }
 
         OpenColumnFilterPopup(columnName, button, grid);
-    }
-
-    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
-    {
-        while (current is not null)
-        {
-            if (current is T match) return match;
-            current = VisualTreeHelper.GetParent(current);
-        }
-        return null;
     }
 
     /// <summary>
