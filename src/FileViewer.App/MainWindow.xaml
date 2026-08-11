@@ -74,9 +74,9 @@
             <Setter Property="Padding" Value="4,0" />
         </Style>
 
-        <!-- Data-column headers (not the fixed checkbox/view columns): click the name to sort, click the menu icon to filter by value. -->
+        <!-- Data-column headers (not the fixed checkbox/view columns): use the menu icon to filter by value. -->
         <Style x:Key="DataColumnHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-            <Setter Property="ToolTip" Value="Click to sort. Use the menu icon to filter by value." />
+            <Setter Property="ToolTip" Value="Use the menu icon to filter by value." />
         </Style>
 
         <Style x:Key="FilterValueCheckBoxStyle" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
@@ -163,7 +163,6 @@
                         <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
-                                <Button Content="Clear sort" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.ClearSortCommand}" />
                             </StackPanel>
                         </Border>
 
@@ -275,14 +274,14 @@
                       Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}"
                       ItemsSource="{Binding Grid.Rows}"
                       SelectedItem="{Binding Grid.SelectedRow, Mode=TwoWay}"
-                      PreviewMouseLeftButtonDown="OnDataGridPreviewMouseLeftButtonDown"
+                      SizeChanged="OnRowsDataGridSizeChanged"
                       SelectionMode="Extended"
                       AutoGenerateColumns="False"
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"
                       CanUserResizeColumns="True"
                       CanUserReorderColumns="True"
-                      CanUserSortColumns="True"
+                      CanUserSortColumns="False"
                       EnableRowVirtualization="True"
                       EnableColumnVirtualization="True"
                       RowHeight="28"

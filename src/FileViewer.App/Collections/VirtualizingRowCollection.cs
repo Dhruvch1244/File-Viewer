@@ -44,12 +44,14 @@ namespace FileViewer.App.Collections;
 /// </summary>
 public sealed class VirtualizingRowCollection(FileViewerSession session, RowSelectionState selection) : IList, INotifyCollectionChanged
 {
-    public const int PageSize = 20;
+    /// <summary>Rows-per-page before MainWindow has had a chance to measure the DataGrid's actual visible height and call <see cref="SetPageSize"/> — a starting point now, not a hard limit.</summary>
+    public const int DefaultPageSize = 20;
 
     private long[]? _effectiveOrder;
     private string? _filterText;
     private long[]? _customOrderOverride;
     private int _pageIndex;
+    private int _pageSize = DefaultPageSize;
     private readonly Dictionary<string, HashSet<string>> _columnValueFilters = new();
     private readonly Dictionary<string, ColumnPatternFilter> _columnPatternFilters = new();
 
@@ -59,6 +61,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
 
     public int TotalRowCount => EffectiveOrder.Length;
     public int PageIndex => _pageIndex;
+    public int PageSize => _pageSize;
     public int PageCount => Math.Max(1, (int)Math.Ceiling(EffectiveOrder.Length / (double)PageSize));
 
     /// <summary>The active search-box text, or null/empty if none — for the "what am I filtering by" summary.</summary>
@@ -154,6 +157,23 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         int clamped = Math.Clamp(pageIndex, 0, PageCount - 1);
         if (clamped == _pageIndex) return;
         _pageIndex = clamped;
+        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+    }
+
+    /// <summary>
+    /// Changes how many rows one page holds — driven by MainWindow measuring how many rows actually
+    /// fit in the DataGrid's current visible height, so a page fills the available screen space
+    /// instead of being pinned to a fixed row count. Keeps the current page index valid against the
+    /// new page count but otherwise leaves the effective order/scroll target alone — resizing the
+    /// window shouldn't discard an active filter or sort, or jump back to page 0.
+    /// </summary>
+    public void SetPageSize(int pageSize)
+    {
+        int clamped = Math.Max(1, pageSize);
+        if (clamped == _pageSize) return;
+
+        _pageSize = clamped;
+        _pageIndex = Math.Clamp(_pageIndex, 0, PageCount - 1);
         CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
 
