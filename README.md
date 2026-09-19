@@ -12,22 +12,71 @@ virtualized scrolling instead of loading the whole file into memory.
 
 - **Handles large files without stalling.** Indexing runs on a background thread with progress
   reporting; the grid only ever decodes the rows currently on screen, backed by an unmanaged
-  (non-GC-heap) row index and an LRU decoded-row cache.
+  (non-GC-heap) row index and an LRU decoded-row cache. Filtering is a single parallel pass that
+  evaluates every active filter at once — see [How filtering stays fast](#how-filtering-stays-fast).
 - **Inline editing with full undo.** Edit any cell, add/duplicate/delete rows, bulk-delete a
   selection, and undo any of it — edits are tracked as an overlay on top of the original file, so
   the source file is never mutated until you export.
 - **Excel-style column filtering.** Click a column header to see the distinct values present in
   that column and filter by them directly, without needing to already know what values exist.
   Double-click a header to sort by it instead.
-- **Search and select at scale.** Free-text search across every column, plus a "select all" that
-  spans every row matching the current filter — not just the page currently on screen — so bulk
-  actions act on the full result set.
+- **Search with as many terms as you need.** Each term carries its own scope (all columns, or one
+  named column), comparison (contains / does not contain / is / is not / starts with / ends with /
+  regex) and case sensitivity. "Find" searches with just the term you typed; "+ Add term" keeps the
+  terms already applied and adds this one, and the match-all/match-any toggle decides whether a row
+  has to satisfy every term or just one. Every active term shows as a chip you can remove on its own.
+- **Several files open at once, as tabs.** Each tab has its own rows, edits, sort, filters and
+  column layout, so comparing two files doesn't mean reopening one to look at the other.
+- **Bulk (multi-section) files, detected automatically.** A bulk export repeats the whole
+  `START-OF-FIELDS` … `END-OF-DATA` block once per requested field, each block naming itself with a
+  `DATA=<something>` attribute and declaring its own columns. Open one and every section appears in
+  a section bar, each as its own table. Detection is by content as well as by the "bulk" naming
+  convention, so a bulk file that isn't named like one still opens correctly. Sections are indexed
+  the first time you open them, not when the file opens — a ten-section file costs one structural
+  scan plus the sections you actually look at. Exporting shows only the section you're on, written
+  as an ordinary single-section DIF file.
+- **Select at scale.** A "select all" that spans every row matching the current filters — not just
+  the page currently on screen — so bulk actions act on the full result set.
 - **Multi-format export.** Export to DIF, CSV, TSV, or JSON with a live preview of the first rows,
   reflecting your current edits, sort, and filters.
 - **Light and dark themes**, toggled from the button in the toolbar.
 - **No content validation gate.** The app shows records as they are in the file; it doesn't reject
   or flag rows for looking "malformed" — only structural file-format issues (e.g. a missing
   section marker) are surfaced as diagnostics.
+
+## How filtering stays fast
+
+Filtering is the one operation that has to look at rows the grid isn't showing, so it is where the
+app either feels instant or doesn't. Four things it does:
+
+- **One pass, not one per filter.** The search terms and every column filter are compiled together
+  into a single predicate set, so a row is read once and judged once instead of surviving one filter
+  only to be re-read by the next.
+- **Reject on bytes before decoding.** A plain substring term over all columns is answered directly
+  against the row's UTF-8 bytes (case-folded for ASCII), so rows that can't match are never split
+  into fields or turned into strings. Only what survives that is decoded — which is what keeps a
+  selective term cheap even when it's combined with column filters that do need decoded values.
+- **Read like the file is laid out.** Rows are contiguous on disk, so a scan in file order is really
+  a sequential read. Workers pull the file in 1 MB runs and serve rows out of that buffer rather than
+  issuing a read per row; a scan in some other order (after an arbitrary-column sort) falls back to
+  per-row reads automatically.
+- **Spread across cores, cancel when stale.** Row reads are independent, so the scan is partitioned
+  across cores and the results concatenated in partition order (which is the input order). The edit
+  overlay is read from a lock-free snapshot rather than taking its lock twice per row, and a scan
+  whose result nothing will read any more — the tab was closed, the filter changed — is cancelled
+  rather than left to finish.
+
+Measured on a synthetic 82 MB file (2,000,000 rows, 4-core container), against the previous
+implementations of the same operations run back-to-back on the same machine and file:
+
+| Operation                                       |  Before |  After |
+| ----------------------------------------------- | ------: | -----: |
+| Search all columns for a substring               | 1446 ms |  17 ms |
+| Search one named column (forces full decoding)   | 1574 ms | 333 ms |
+| Search term + two column filters together        | 1659 ms |  52 ms |
+| Distinct values of a column (the filter popup)   | 1480 ms | 493 ms |
+
+Run `benchmarks/FileViewer.Benchmarks` for the maintained versions of these measurements.
 
 ## Project layout
 

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Windows.Input;
 using FileViewer.App.Collections;
 using FileViewer.App.Common;
+using FileViewer.Core.Filtering;
 using FileViewer.Core.Overlay;
 using FileViewer.Core.Session;
 using FileViewer.Core.Sorting;
@@ -12,21 +13,33 @@ namespace FileViewer.App.ViewModels;
 /// Owns the grid's data source, column list, current selection, and the row-operation/sort
 /// commands. Clicking the "_ID" column header uses Core's fast unmanaged-key sort
 /// (<see cref="FileViewerSession.ApplySort"/>, synchronous — it only permutes a pre-extracted key
-/// array, no row decoding); clicking any other column header, applying the search box, an
-/// Excel-style column value filter, or the per-column filter row all fall back to decoding every
-/// candidate row (PRS §8's acknowledged slower path) and run on a background thread via
-/// <see cref="IsBusy"/>-gated async methods — see <see cref="VirtualizingRowCollection"/>'s remarks
-/// for why: doing this synchronously on the UI thread is what caused input to go missing while a
-/// filter was computing.
+/// array, no row decoding); clicking any other column header, applying the search, an Excel-style
+/// column value filter, or the per-column filter row all fall back to reading candidate rows (PRS
+/// §8's acknowledged slower path) and run on a background thread via <see cref="IsBusy"/>-gated
+/// async methods — see <see cref="VirtualizingRowCollection"/>'s remarks for why: doing this
+/// synchronously on the UI thread is what caused input to go missing while a filter was computing.
+///
+/// The search is a <see cref="SearchQuery"/> of any number of terms rather than a single substring:
+/// the properties here (<see cref="SearchText"/>, <see cref="SearchColumn"/>,
+/// <see cref="SearchMode"/>, <see cref="SearchCaseSensitive"/>) describe the one term currently
+/// being typed, which <see cref="ApplySearchCommand"/> searches with on its own and
+/// <see cref="AddSearchTermCommand"/> adds to the terms already applied.
 /// </summary>
 public sealed class GridViewModel : ObservableObject
 {
     /// <summary>A file can have hundreds of columns; showing them all at once is unusable, so only the first this-many are visible by default — the rest are still reachable via the column chooser.</summary>
     public const int DefaultVisibleColumnCount = 20;
 
+    /// <summary>The "any column" entry of the search-scope list — the default, and what the plain search box has always meant.</summary>
+    public const string AllColumnsScope = "All columns";
+
     private RowViewModel? _selectedRow;
     private int _frozenColumnCount;
     private string _searchText = string.Empty;
+    private string _searchColumn = AllColumnsScope;
+    private SearchModeOption _searchMode = SearchModeOption.Default;
+    private bool _searchCaseSensitive;
+    private bool _matchAllSearchTerms = true;
     private string _columnSearchText = string.Empty;
     private string? _currentSortColumn;
     private SortDirection _currentSortDirection = SortDirection.Ascending;
@@ -48,6 +61,7 @@ public sealed class GridViewModel : ObservableObject
             RebuildActiveFilterChips();
         };
         ColumnNames = session.FileIndex.Header.ColumnNames;
+        SearchColumns = [AllColumnsScope, .. ColumnNames];
         Columns = new ObservableCollection<GridColumnInfo>(
             ColumnNames.Select((name, index) => new GridColumnInfo(name, index) { IsVisible = index < DefaultVisibleColumnCount }));
 
@@ -57,9 +71,10 @@ public sealed class GridViewModel : ObservableObject
         DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => Selection.Count > 0 && !IsBusy);
         UndoCommand = RelayCommand.Create(() => { Session.Overlay.Undo(); Rows.Invalidate(); }, () => Session.Overlay.CanUndo && !IsBusy);
 
-        ApplySearchCommand = new AsyncRelayCommand(() => RunBusyAsync(() => Rows.ApplyFilterAsync(SearchText)), () => !IsBusy);
+        ApplySearchCommand = new AsyncRelayCommand(ApplySearchAsync, () => !IsBusy);
+        AddSearchTermCommand = new AsyncRelayCommand(AddSearchTermAsync, () => !IsBusy && !string.IsNullOrEmpty(SearchText));
         ClearSearchCommand = new AsyncRelayCommand(
-            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ApplyFilterAsync(null)); }, () => !IsBusy);
+            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ApplySearchAsync(SearchQuery.Empty)); }, () => !IsBusy);
         ClearAllFiltersCommand = new AsyncRelayCommand(
             () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ClearAllFiltersAsync()); }, () => !IsBusy && HasActiveFilters);
 
@@ -127,12 +142,69 @@ public sealed class GridViewModel : ObservableObject
     /// <summary>Bindable mirror of <see cref="RowSelectionState.Count"/> for the toolbar's "N selected" indicator.</summary>
     public int SelectedCount => Selection.Count;
 
-    /// <summary>Substring to search for across all columns. Applied on <see cref="ApplySearchCommand"/> (not per-keystroke — an arbitrary-column filter decodes every candidate row, so it's a deliberate action, not a live-as-you-type one).</summary>
+    /// <summary>
+    /// The term currently typed into the search box. Applied on <see cref="ApplySearchCommand"/>
+    /// (not per-keystroke — searching decodes candidate rows, so it's a deliberate action, not a
+    /// live-as-you-type one), either replacing the search or, via
+    /// <see cref="AddSearchTermCommand"/>, adding to it.
+    /// </summary>
     public string SearchText
     {
         get => _searchText;
-        set => SetField(ref _searchText, value);
+        set
+        {
+            if (SetField(ref _searchText, value)) CommandManager.InvalidateRequerySuggested();
+        }
     }
+
+    /// <summary>What the typed term applies to: <see cref="AllColumnsScope"/> or one specific column.</summary>
+    public string SearchColumn
+    {
+        get => _searchColumn;
+        set => SetField(ref _searchColumn, value);
+    }
+
+    /// <summary>How the typed term is compared — contains, equals, starts with, regex, or their negations.</summary>
+    public SearchModeOption SearchMode
+    {
+        get => _searchMode;
+        set => SetField(ref _searchMode, value);
+    }
+
+    public bool SearchCaseSensitive
+    {
+        get => _searchCaseSensitive;
+        set => SetField(ref _searchCaseSensitive, value);
+    }
+
+    /// <summary>With several search terms active: true = a row must match all of them, false = any one is enough.</summary>
+    public bool MatchAllSearchTerms
+    {
+        get => _matchAllSearchTerms;
+        set
+        {
+            if (!SetField(ref _matchAllSearchTerms, value)) return;
+            OnPropertyChanged(nameof(SearchCombineLabel));
+
+            // Re-apply straight away so the toggle is visibly the thing that changed the row set.
+            // While a filter is already running, the new mode simply takes effect on the next search
+            // rather than starting a second overlapping one.
+            if (!IsBusy && Rows.CurrentSearchQuery.Criteria.Count > 1)
+            {
+                _ = RunBusyAsync(() => Rows.ApplySearchAsync(Rows.CurrentSearchQuery with { Combine = CurrentCombineMode }));
+            }
+        }
+    }
+
+    public string SearchCombineLabel => MatchAllSearchTerms ? "Match all" : "Match any";
+
+    /// <summary>Scope options for the search box: "All columns" followed by every column of this section.</summary>
+    public IReadOnlyList<string> SearchColumns { get; }
+
+    /// <summary>The comparison options offered next to the search box.</summary>
+    public IReadOnlyList<SearchModeOption> SearchModes { get; } = SearchModeOption.All;
+
+    private SearchCombineMode CurrentCombineMode => MatchAllSearchTerms ? SearchCombineMode.All : SearchCombineMode.Any;
 
     /// <summary>Live substring filter over <see cref="Columns"/>' names, applied per-keystroke by the column-chooser popup (cheap — it's just filtering an in-memory name list, not decoding rows).</summary>
     public string ColumnSearchText
@@ -154,6 +226,7 @@ public sealed class GridViewModel : ObservableObject
     public ICommand DeleteSelectedRowsCommand { get; }
     public ICommand UndoCommand { get; }
     public ICommand ApplySearchCommand { get; }
+    public ICommand AddSearchTermCommand { get; }
     public ICommand ClearSearchCommand { get; }
     public ICommand ClearAllFiltersCommand { get; }
     public ICommand PreviousPageCommand { get; }
@@ -210,8 +283,10 @@ public sealed class GridViewModel : ObservableObject
     /// <see cref="IsBusy"/>; the caller (the popup) is expected to already be blocked from opening
     /// a second lookup in that state, this is just a safety net.
     /// </summary>
-    public Task<List<string>> GetDistinctValuesForColumnAsync(string columnName) =>
-        IsBusy ? Task.FromResult(new List<string>()) : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName));
+    public Task<DistinctValueResult> GetDistinctValuesForColumnAsync(string columnName) =>
+        IsBusy
+            ? Task.FromResult(new DistinctValueResult([], false))
+            : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName));
 
     /// <summary>Runs a background filter/sort computation with <see cref="IsBusy"/> set for its duration.</summary>
     private async Task RunBusyAsync(Func<Task> operation)
@@ -245,11 +320,13 @@ public sealed class GridViewModel : ObservableObject
     {
         ActiveFilterChips.Clear();
 
-        if (!string.IsNullOrEmpty(Rows.CurrentSearchText))
+        SearchQuery query = Rows.CurrentSearchQuery;
+        for (int i = 0; i < query.Criteria.Count; i++)
         {
+            int index = i; // captured per chip: removing one term must not disturb the others
             ActiveFilterChips.Add(new ActiveFilterChip(
-                $"Search: \"{Rows.CurrentSearchText}\"",
-                () => RunBusyAsync(() => { SearchText = string.Empty; return Rows.ApplyFilterAsync(null); })));
+                query.Criteria[i].Describe(),
+                () => RunBusyAsync(() => Rows.ApplySearchAsync(Rows.CurrentSearchQuery.RemoveAt(index)))));
         }
 
         foreach ((string columnName, HashSet<string> allowedValues) in Rows.ColumnValueFilters)
@@ -267,7 +344,32 @@ public sealed class GridViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(HasActiveFilters));
+        OnPropertyChanged(nameof(HasMultipleSearchTerms));
     }
+
+    /// <summary>True once the search carries more than one term — what makes the match-all/match-any choice meaningful.</summary>
+    public bool HasMultipleSearchTerms => Rows.CurrentSearchQuery.Criteria.Count > 1;
+
+    /// <summary>Replaces the whole search with the term currently typed (an empty box clears it).</summary>
+    private Task ApplySearchAsync() =>
+        RunBusyAsync(() => Rows.ApplySearchAsync(
+            string.IsNullOrEmpty(SearchText) ? SearchQuery.Empty : new SearchQuery([BuildCriterion()], CurrentCombineMode)));
+
+    /// <summary>Adds the typed term to the search instead of replacing it, then clears the box ready for the next one.</summary>
+    private Task AddSearchTermAsync()
+    {
+        if (string.IsNullOrEmpty(SearchText)) return Task.CompletedTask;
+
+        SearchQuery query = (Rows.CurrentSearchQuery with { Combine = CurrentCombineMode }).Add(BuildCriterion());
+        SearchText = string.Empty;
+        return RunBusyAsync(() => Rows.ApplySearchAsync(query));
+    }
+
+    private SearchCriterion BuildCriterion() => new(
+        SearchText,
+        SearchMode.Mode,
+        SearchColumn == AllColumnsScope ? null : SearchColumn,
+        SearchCaseSensitive);
 
     private List<long> CollectBaseAndAddedRowIndices()
     {

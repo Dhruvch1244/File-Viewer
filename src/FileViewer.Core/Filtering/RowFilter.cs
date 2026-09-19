@@ -6,10 +6,14 @@ using FileViewer.Core.Overlay;
 namespace FileViewer.Core.Filtering;
 
 /// <summary>
-/// Arbitrary-column substring filter. Unlike sorting (which only ever permutes the pre-extracted
-/// "_ID" <see cref="Native.SortKey"/> array), matching an arbitrary column means decoding each
-/// candidate row through <see cref="RowResolver"/> — the expected slower path PRS §8 budgets
-/// "low single-digit seconds" for at 2 GB scale, versus sort's near-instant array permutation.
+/// Convenience entry points for the individual filter kinds, each expressed as a one-predicate
+/// <see cref="RowPredicateSet"/> run through <see cref="RowQueryEngine"/>. Real callers with more
+/// than one filter active should compile them together and make a single call instead — see
+/// <see cref="RowPredicateSet"/> for why one pass beats a pass per filter.
+///
+/// Matching an arbitrary column means decoding candidate rows (unlike sorting by "_ID", which only
+/// permutes a pre-extracted key array) — the slower path PRS §8 budgets "low single-digit seconds"
+/// for at 2 GB scale.
 /// </summary>
 public static class RowFilter
 {
@@ -21,59 +25,53 @@ public static class RowFilter
         EditOverlay overlay,
         DecodedRowCache cache)
     {
+        List<long> rows = [.. rowIndices];
         if (string.IsNullOrEmpty(searchText))
         {
-            return [.. rowIndices];
+            return rows;
         }
 
-        var result = new List<long>();
-        foreach (long rowIndex in rowIndices)
+        return RowQueryEngine.Filter(
+            rows,
+            RowPredicateSet.Compile(SearchQuery.ForText(searchText), null, null, fileIndex.Header),
+            fileIndex, overlay, cache);
+    }
+
+    /// <summary>Returns the subset of <paramref name="rowIndices"/> (order preserved) matching <paramref name="query"/> — the multi-term main search.</summary>
+    public static List<long> Filter(
+        IEnumerable<long> rowIndices,
+        SearchQuery query,
+        FileIndex fileIndex,
+        EditOverlay overlay,
+        DecodedRowCache? cache = null,
+        CancellationToken cancellationToken = default)
+    {
+        List<long> rows = [.. rowIndices];
+        if (query.IsEmpty)
         {
-            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
-            if (resolved is null) continue; // tombstone
-
-            foreach (string field in resolved.FieldValues)
-            {
-                if (field.Contains(searchText, StringComparison.OrdinalIgnoreCase))
-                {
-                    result.Add(rowIndex);
-                    break;
-                }
-            }
+            return rows;
         }
-        return result;
+
+        return RowQueryEngine.Filter(
+            rows,
+            RowPredicateSet.Compile(query, null, null, fileIndex.Header),
+            fileIndex, overlay, cache, cancellationToken);
     }
 
     /// <summary>
-    /// Returns every distinct value <paramref name="columnName"/> takes across <paramref name="rowIndices"/>
+    /// Every distinct value <paramref name="columnName"/> takes across <paramref name="rowIndices"/>
     /// — an Excel-style "pick from what's actually there" filter menu, so a user never has to
     /// already know a column's possible values to filter by them. Sorted ordinally; case-sensitive
     /// (two differently-cased strings are genuinely different values here, matching what a user
-    /// would see displayed).
+    /// would see displayed). Capped — see <see cref="RowQueryEngine.GetDistinctValues"/>.
     /// </summary>
     public static List<string> GetDistinctValues(
         IEnumerable<long> rowIndices,
         string columnName,
         FileIndex fileIndex,
         EditOverlay overlay,
-        DecodedRowCache cache)
-    {
-        int columnIndex = fileIndex.Header.ColumnIndexOf(columnName);
-        if (columnIndex < 0)
-        {
-            return [];
-        }
-
-        var distinct = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (long rowIndex in rowIndices)
-        {
-            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
-            if (resolved is null) continue;
-
-            distinct.Add(columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty);
-        }
-        return [.. distinct];
-    }
+        DecodedRowCache cache) =>
+        [.. RowQueryEngine.GetDistinctValues([.. rowIndices], columnName, fileIndex, overlay, cache).Values];
 
     /// <summary>Returns the subset of <paramref name="rowIndices"/> (order preserved) whose value for <paramref name="columnName"/> is one of <paramref name="allowedValues"/>.</summary>
     public static List<long> FilterByColumnValues(
@@ -84,25 +82,17 @@ public static class RowFilter
         EditOverlay overlay,
         DecodedRowCache cache)
     {
-        int columnIndex = fileIndex.Header.ColumnIndexOf(columnName);
-        if (columnIndex < 0)
+        List<long> rows = [.. rowIndices];
+        if (fileIndex.Header.ColumnIndexOf(columnName) < 0)
         {
-            return [.. rowIndices];
+            return rows;
         }
 
-        var result = new List<long>();
-        foreach (long rowIndex in rowIndices)
-        {
-            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
-            if (resolved is null) continue;
-
-            string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
-            if (allowedValues.Contains(value))
-            {
-                result.Add(rowIndex);
-            }
-        }
-        return result;
+        var filters = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal) { [columnName] = [.. allowedValues] };
+        return RowQueryEngine.Filter(
+            rows,
+            RowPredicateSet.Compile(SearchQuery.Empty, filters, null, fileIndex.Header),
+            fileIndex, overlay, cache);
     }
 
     /// <summary>
@@ -131,7 +121,7 @@ public static class RowFilter
     /// <summary>
     /// Returns the subset of <paramref name="rowIndices"/> (order preserved) whose value for
     /// <paramref name="columnName"/> matches <paramref name="pattern"/> — a per-column filter box
-    /// (ag-Grid's "floating filter row" is the model), as opposed to <see cref="Filter"/>'s
+    /// (ag-Grid's "floating filter row" is the model), as opposed to <see cref="Filter(IEnumerable{long}, string, FileIndex, EditOverlay, DecodedRowCache)"/>'s
     /// substring search across every column at once. An invalid regex matches nothing rather than
     /// throwing — use <see cref="TryCompileRegex"/> first if the caller wants to distinguish "no
     /// matches" from "not a valid pattern yet" (e.g. while the user is still typing it).
@@ -145,33 +135,19 @@ public static class RowFilter
         EditOverlay overlay,
         DecodedRowCache cache)
     {
-        int columnIndex = fileIndex.Header.ColumnIndexOf(columnName);
-        if (columnIndex < 0 || string.IsNullOrEmpty(pattern))
+        List<long> rows = [.. rowIndices];
+        if (fileIndex.Header.ColumnIndexOf(columnName) < 0 || string.IsNullOrEmpty(pattern))
         {
-            return [.. rowIndices];
+            return rows;
         }
 
-        Regex? regex = null;
-        if (useRegex && !TryCompileRegex(pattern, out regex, out _))
+        var filters = new Dictionary<string, ColumnPatternFilter>(StringComparer.Ordinal)
         {
-            return [];
-        }
-
-        var result = new List<long>();
-        foreach (long rowIndex in rowIndices)
-        {
-            ResolvedRow? resolved = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache);
-            if (resolved is null) continue;
-
-            string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
-            bool isMatch = regex is not null
-                ? regex.IsMatch(value)
-                : value.Contains(pattern, StringComparison.OrdinalIgnoreCase);
-            if (isMatch)
-            {
-                result.Add(rowIndex);
-            }
-        }
-        return result;
+            [columnName] = new ColumnPatternFilter(pattern, useRegex),
+        };
+        return RowQueryEngine.Filter(
+            rows,
+            RowPredicateSet.Compile(SearchQuery.Empty, null, filters, fileIndex.Header),
+            fileIndex, overlay, cache);
     }
 }

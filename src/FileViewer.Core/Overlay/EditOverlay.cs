@@ -21,7 +21,7 @@ namespace FileViewer.Core.Overlay;
 /// individually undoable, matching the PRS §9 data-model sketch, which comments the row-op list
 /// alone as "also the undo stack".
 /// </summary>
-public sealed class EditOverlay
+public sealed class EditOverlay : IOverlayView
 {
     private readonly object _gate = new();
     private readonly Dictionary<long, List<CellEdit>> _cellEdits = new();
@@ -31,6 +31,36 @@ public sealed class EditOverlay
     private long _nextSyntheticIndex = -1;
 
     public bool CanUndo { get { lock (_gate) return _rowOps.Count > 0; } }
+
+    /// <summary>True when nothing has been edited: no cell edits, no added/duplicated rows, no deletions.</summary>
+    public bool IsEmpty
+    {
+        get { lock (_gate) return _cellEdits.Count == 0 && _rowOps.Count == 0 && _rowStateIndex.Count == 0; }
+    }
+
+    /// <summary>
+    /// Freezes the current overlay state into a lock-free <see cref="OverlaySnapshot"/>. Taken once
+    /// per filter/sort/export scan so that walking millions of rows doesn't take this lock twice per
+    /// row — see <see cref="IOverlayView"/>.
+    /// </summary>
+    public OverlaySnapshot CreateSnapshot()
+    {
+        lock (_gate)
+        {
+            var rowStates = new Dictionary<long, RowState>(_rowStateIndex);
+            var cellEdits = new Dictionary<long, CellEdit[]>(_cellEdits.Count);
+            foreach ((long rowIndex, List<CellEdit> edits) in _cellEdits)
+            {
+                cellEdits[rowIndex] = [.. edits];
+            }
+            var addedRows = new Dictionary<long, string[]>(_addedRowData.Count);
+            foreach ((long rowIndex, string[] fields) in _addedRowData)
+            {
+                addedRows[rowIndex] = fields;
+            }
+            return new OverlaySnapshot(rowStates, cellEdits, addedRows);
+        }
+    }
 
     /// <summary>Records (or replaces, for repeated edits to the same cell) an edit. Last write for a given column wins during resolution.</summary>
     public void EditCell(long rowIndex, string column, string newValue)

@@ -1,4 +1,5 @@
 using FileViewer.Core.Caching;
+using FileViewer.Core.Dif;
 using FileViewer.Core.Export;
 using FileViewer.Core.Indexing;
 using FileViewer.Core.Native;
@@ -19,6 +20,15 @@ public sealed class FileViewerSession : IDisposable
     private bool _disposed;
 
     public FileIndex FileIndex { get; }
+
+    /// <summary>The whole file's structure, including sections this session isn't showing — see <see cref="OpenSectionAsync"/>.</summary>
+    public DifFileLayout Layout => FileIndex.Layout;
+
+    /// <summary>Every data section the file declares. One entry for an ordinary export; one per <c>DATA=</c> block for a bulk export.</summary>
+    public IReadOnlyList<DifSection> Sections => Layout.Sections;
+
+    /// <summary>Which section this session is showing.</summary>
+    public int SectionIndex => FileIndex.SectionIndex;
     public EditOverlay Overlay { get; } = new();
     public DecodedRowCache Cache { get; }
 
@@ -40,6 +50,24 @@ public sealed class FileViewerSession : IDisposable
         CancellationToken cancellationToken = default)
     {
         FileIndex index = await FileIndexer.IndexAsync(path, progress, cancellationToken);
+        return new FileViewerSession(index, cacheCapacity);
+    }
+
+    /// <summary>
+    /// Opens one section of a file whose structure has already been scanned — how a bulk file's
+    /// other sections are reached. Each section gets its own session (and therefore its own row
+    /// index, edit overlay, cache, sort and filters), and only the sections actually opened are ever
+    /// indexed.
+    /// </summary>
+    public static async Task<FileViewerSession> OpenSectionAsync(
+        string path,
+        DifFileLayout layout,
+        int sectionIndex,
+        int cacheCapacity = DecodedRowCache.DefaultCapacity,
+        IProgress<IndexingProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        FileIndex index = await FileIndexer.IndexSectionAsync(path, layout, sectionIndex, progress, cancellationToken);
         return new FileViewerSession(index, cacheCapacity);
     }
 

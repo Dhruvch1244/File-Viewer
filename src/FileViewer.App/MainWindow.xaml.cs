@@ -13,6 +13,7 @@ using System.Windows.Threading;
 using FileViewer.App.Collections;
 using FileViewer.App.ViewModels;
 using FileViewer.App.Views;
+using FileViewer.Core.Filtering;
 using Microsoft.Win32;
 
 namespace FileViewer.App;
@@ -34,6 +35,17 @@ public partial class MainWindow : Window
     /// <summary>The header TextBlock for each data column — <see cref="UpdateColumnHeaderText"/> updates these directly now that <c>DataGridColumn.Header</c> is a Grid (name + menu button), not a plain string.</summary>
     private readonly Dictionary<string, TextBlock> _columnHeaderTextBlocks = new();
 
+    /// <summary>
+    /// The grid whose change notifications the current column set is wired to, and the handlers
+    /// wired to it. With several tabs (and several sections per tab) sharing one DataGrid, the same
+    /// <see cref="GridViewModel"/> is rebuilt against every time the user switches back to it — so
+    /// the previous wiring has to come off first, or each visit would leave another live handler
+    /// behind updating a DataGridColumn that is no longer in the grid.
+    /// </summary>
+    private GridViewModel? _wiredGrid;
+    private PropertyChangedEventHandler? _wiredGridHandler;
+    private readonly List<(GridColumnInfo Definition, PropertyChangedEventHandler Handler)> _wiredColumnDefinitions = new();
+
     /// <summary>The 3 bars of each data column's header "menu" icon (see <see cref="BuildColumnMenuIcon"/>) — recolored to the accent brush by <see cref="UpdateColumnHeaderText"/> while that column has an active Excel-style value filter, mirroring the "●" text indicator.</summary>
     private readonly Dictionary<string, Rectangle[]> _columnMenuIconBars = new();
 
@@ -42,6 +54,13 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _viewModel;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+    }
+
+    /// <summary>Releases every open file's index/handles on close — each tab holds unmanaged row-index memory and an open file handle.</summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        _viewModel.Dispose();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -65,6 +84,28 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != true) return;
 
         await _viewModel.OpenFileAsync(dialog.FileName);
+    }
+
+    /// <summary>Tab strip: brings that file's grid to the front (indexing its section first if it has never been shown).</summary>
+    private async void OnFileTabClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: FileTabViewModel tab }) return;
+        await _viewModel.ActivateTabAsync(tab);
+    }
+
+    /// <summary>Section bar (bulk files): switches the active tab to one of its DATA= sections, indexing it on first use.</summary>
+    private async void OnSectionChipClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: FileSectionViewModel section }) return;
+        if (_viewModel.ActiveTab is not { } tab) return;
+        await _viewModel.ShowSectionAsync(tab, section);
+    }
+
+    /// <summary>Flips the multi-term search between "a row must match every term" and "any one term is enough".</summary>
+    private void OnToggleCombineModeClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.Grid is not { } grid) return;
+        grid.MatchAllSearchTerms = !grid.MatchAllSearchTerms;
     }
 
     private void OnColumnsButtonClick(object sender, RoutedEventArgs e) => ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
@@ -182,6 +223,8 @@ public partial class MainWindow : Window
 
     private void RebuildColumns()
     {
+        DetachColumnWiring();
+
         RowsDataGrid.Columns.Clear();
 
         _columnHeaderTextBlocks.Clear();
@@ -277,13 +320,16 @@ public partial class MainWindow : Window
             };
             RowsDataGrid.Columns.Add(column);
 
-            definition.PropertyChanged += (_, args) =>
+            void OnDefinitionPropertyChanged(object? _, PropertyChangedEventArgs args)
             {
                 if (args.PropertyName == nameof(GridColumnInfo.IsVisible))
                 {
                     column.Visibility = definition.IsVisible ? Visibility.Visible : Visibility.Collapsed;
                 }
-            };
+            }
+
+            definition.PropertyChanged += OnDefinitionPropertyChanged;
+            _wiredColumnDefinitions.Add((definition, OnDefinitionPropertyChanged));
         }
 
         // The select-checkbox and view-button columns are always frozen in addition to however
@@ -295,7 +341,7 @@ public partial class MainWindow : Window
         columnsView.Filter = o => o is GridColumnInfo info
             && (string.IsNullOrEmpty(grid.ColumnSearchText) || info.Name.Contains(grid.ColumnSearchText, StringComparison.OrdinalIgnoreCase));
 
-        grid.PropertyChanged += (_, args) =>
+        void OnGridPropertyChanged(object? _, PropertyChangedEventArgs args)
         {
             switch (args.PropertyName)
             {
@@ -306,7 +352,28 @@ public partial class MainWindow : Window
                     columnsView.Refresh();
                     break;
             }
-        };
+        }
+
+        grid.PropertyChanged += OnGridPropertyChanged;
+        _wiredGrid = grid;
+        _wiredGridHandler = OnGridPropertyChanged;
+    }
+
+    /// <summary>Unhooks everything <see cref="RebuildColumns"/> wired up for the previously-shown grid.</summary>
+    private void DetachColumnWiring()
+    {
+        if (_wiredGrid is not null && _wiredGridHandler is not null)
+        {
+            _wiredGrid.PropertyChanged -= _wiredGridHandler;
+        }
+        _wiredGrid = null;
+        _wiredGridHandler = null;
+
+        foreach ((GridColumnInfo definition, PropertyChangedEventHandler handler) in _wiredColumnDefinitions)
+        {
+            definition.PropertyChanged -= handler;
+        }
+        _wiredColumnDefinitions.Clear();
     }
 
     private static string HeaderTextFor(string columnName, bool isFiltered) =>
@@ -386,11 +453,12 @@ public partial class MainWindow : Window
         _activeFilterOptionsView = null;
         ColumnFilterValuesList.ItemsSource = null;
         ColumnFilterLoadingText.Visibility = Visibility.Visible;
+        ColumnFilterTruncatedText.Visibility = Visibility.Collapsed;
 
         ColumnFilterPopup.PlacementTarget = placementTarget;
         ColumnFilterPopup.IsOpen = true;
 
-        List<string> distinctValues = await grid.GetDistinctValuesForColumnAsync(columnName);
+        DistinctValueResult distinctValues = await grid.GetDistinctValuesForColumnAsync(columnName);
 
         // The popup (or the column it was opened for) may have moved on while the lookup was
         // running — the user could have closed it, or clicked a different column's header instead.
@@ -399,7 +467,11 @@ public partial class MainWindow : Window
 
         ColumnFilterLoadingText.Visibility = Visibility.Collapsed;
         HashSet<string>? currentSelection = grid.Rows.GetColumnValueFilter(columnName);
-        _activeFilterOptions = [.. distinctValues.Select(v => new ColumnFilterValueOption(v, currentSelection is null || currentSelection.Contains(v)))];
+        _activeFilterOptions = [.. distinctValues.Values.Select(v => new ColumnFilterValueOption(v, currentSelection is null || currentSelection.Contains(v)))];
+
+        // A column with more distinct values than the lookup collects (a price, an ID) would
+        // otherwise present a partial list as if it were the whole set.
+        ColumnFilterTruncatedText.Visibility = distinctValues.Truncated ? Visibility.Visible : Visibility.Collapsed;
 
         ICollectionView view = CollectionViewSource.GetDefaultView(_activeFilterOptions);
         _activeFilterOptionsView = view;

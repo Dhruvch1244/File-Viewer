@@ -65,6 +65,27 @@ public sealed class DifFileHeader
 
     public required IReadOnlyList<DifDiagnostic> Diagnostics { get; init; }
 
+    /// <summary>
+    /// Name of the section these columns/offsets describe — a bulk file's <c>DATA=</c> attribute
+    /// value, or a synthesized <c>"Section N"</c>. See <see cref="DifSection"/>.
+    /// </summary>
+    public string SectionName { get; init; } = DifSectionScanner.SynthesizeSectionName(0);
+
+    /// <summary>Zero-based index of this section within the file.</summary>
+    public int SectionIndex { get; init; }
+
+    /// <summary>How many sections the file has in total — 1 for an ordinary (non-bulk) export.</summary>
+    public int SectionCount { get; init; } = 1;
+
+    /// <summary>True when the file this header came from carries more than one data section.</summary>
+    public bool IsMultiSection => SectionCount > 1;
+
+    /// <summary>Byte offset where this section's own block (its metadata/START-OF-FIELDS lines) begins — 0 for a single-section file, whose block starts at the top of the file.</summary>
+    public long SectionBlockStartOffset { get; init; }
+
+    /// <summary>Byte offset where the file trailer begins. Equals <see cref="DataEndOffsetExclusive"/> for a single-section file; for a bulk file it is past every section's data.</summary>
+    public long TrailerStartOffset { get; init; }
+
     public int ColumnIndexOf(string columnName)
     {
         for (int i = 0; i < ColumnNames.Count; i++)

@@ -84,6 +84,7 @@ public static class DifHeaderParser
             DeclaredDataRecords = declaredDataRecords,
             DataStartOffset = dataStartOffset,
             DataEndOffsetExclusive = dataEndOffsetExclusive,
+            TrailerStartOffset = dataEndOffsetExclusive,
             IsValid = true,
             Diagnostics = diagnostics,
         };
@@ -248,7 +249,7 @@ public static class DifHeaderParser
     /// its row's actual field index everywhere else in the app (grid, sort, export, edit) without any
     /// further special-casing.
     /// </summary>
-    private static void ApplyImplicitRecordPrefix(List<string> columnNames)
+    internal static void ApplyImplicitRecordPrefix(List<string> columnNames)
     {
         if (columnNames.Count > 0 && columnNames[0] == DifFormatOptions.ImplicitRecordPrefixColumns[0])
         {

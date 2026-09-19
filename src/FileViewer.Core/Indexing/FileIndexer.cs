@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.Win32.SafeHandles;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Native;
@@ -11,7 +12,11 @@ namespace FileViewer.Core.Indexing;
 ///
 /// Phase A (sequential, cheap): locates the header/field/trailer markers via
 /// <see cref="DifHeaderParser"/> by reading two small bounded windows (a head window and a tail
-/// window), without touching the bulk data-row region.
+/// window), without touching the bulk data-row region. A file that looks like a multi-section
+/// ("bulk") export instead goes through <see cref="DifSectionScanner"/>, which walks the file once
+/// to find every section — see <see cref="DifBulkDetection"/> for why that cost is only ever paid
+/// by files that actually need it, and <see cref="IndexSectionAsync"/> for why it is only paid once
+/// per file rather than once per section.
 ///
 /// Phase B (parallel): scans only the <c>[DataStartOffset, DataEndOffsetExclusive)</c> byte range
 /// in contiguous, line-aligned chunks — one <see cref="Task"/> per chunk, each chunk capped at
@@ -43,10 +48,118 @@ public static class FileIndexer
     public static Task<FileIndex> IndexAsync(
         string path, IProgress<IndexingProgress>? progress = null, CancellationToken cancellationToken = default)
     {
-        return Task.Run(() => IndexCore(path, progress, cancellationToken), cancellationToken);
+        return Task.Run(() => IndexCore(path, layout: null, sectionIndex: 0, progress, cancellationToken), cancellationToken);
     }
 
-    private static FileIndex IndexCore(string path, IProgress<IndexingProgress>? progress, CancellationToken cancellationToken)
+    /// <summary>
+    /// Indexes one section of an already-scanned multi-section ("bulk") file. Passing the
+    /// <paramref name="layout"/> back in is the point: the file's structure is walked once, when it
+    /// is first opened, and every later section switch only pays for that section's own rows —
+    /// sections the user never opens are never indexed at all.
+    /// </summary>
+    public static Task<FileIndex> IndexSectionAsync(
+        string path,
+        DifFileLayout layout,
+        int sectionIndex,
+        IProgress<IndexingProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.Run(() => IndexCore(path, layout, sectionIndex, progress, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// Walks a file's structure without indexing any rows — used to list a bulk file's sections up
+    /// front. Ordinary (single-section) files take the cheap bounded head/tail path; see
+    /// <see cref="DifBulkDetection"/>.
+    /// </summary>
+    public static Task<DifFileLayout> ScanLayoutAsync(string path, CancellationToken cancellationToken = default)
+    {
+        return Task.Run(() =>
+        {
+            long fileLength = new FileInfo(path).Length;
+            using SafeFileHandle handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.SequentialScan);
+            return BuildLayout(handle, path, fileLength, new List<DifDiagnostic>(), cancellationToken);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Produces the file's <see cref="DifFileLayout"/>: the cheap bounded head/tail parse for an
+    /// ordinary file, the sequential section scan for one that looks like a bulk export.
+    /// </summary>
+    private static DifFileLayout BuildLayout(
+        SafeFileHandle fileHandle, string path, long fileLength, List<DifDiagnostic> diagnostics, CancellationToken cancellationToken)
+    {
+        int headWindowLength = checked((int)Math.Min(fileLength, DifHeaderParser.HeadWindowBytes));
+        byte[] headBuffer = new byte[headWindowLength];
+        RandomAccessReader.ReadExactly(fileHandle, headBuffer, 0);
+
+        if (DifBulkDetection.ShouldScanSections(path, headBuffer))
+        {
+            DifFileLayout scanned = DifSectionScanner.Scan(DifByteSource.FromHandle(fileHandle, fileLength), cancellationToken);
+            if (scanned.IsValid)
+            {
+                return scanned;
+            }
+            // The name said "bulk" but the content didn't scan as DIF at all — fall through to the
+            // ordinary parse so the file still reports the same diagnostics it always would have.
+        }
+
+        var forwardResult = DifHeaderParser.ParseHeaderAndFields(headBuffer, diagnostics);
+        if (forwardResult is null)
+        {
+            return DifFileLayout.Invalid(diagnostics);
+        }
+
+        (string headerMarker, bool hasFileStartMarker, Dictionary<string, string> headerMetadata,
+            List<string> columnNames, Dictionary<string, string> postFieldsMetadata, long dataStartOffset) = forwardResult.Value;
+        char delimiter = DifHeaderParser.ResolveDelimiter(headerMetadata, diagnostics);
+
+        long tailWindowStart = DifHeaderParser.ComputeTailWindowStart(dataStartOffset, fileLength);
+        int tailWindowLength = checked((int)(fileLength - tailWindowStart));
+        byte[] tailBuffer = new byte[tailWindowLength];
+        RandomAccessReader.ReadExactly(fileHandle, tailBuffer, tailWindowStart);
+        (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive, string trailerMarker, bool hasFileEndMarker) =
+            DifHeaderParser.ParseTrailerAndDataEnd(tailBuffer, tailWindowStart, fileLength, diagnostics);
+
+        int? declaredDataRecords = null;
+        if (trailerMetadata.TryGetValue(DifFormatOptions.DataRecordsKey, out string? recordsText)
+            && int.TryParse(recordsText, out int parsedRecords))
+        {
+            declaredDataRecords = parsedRecords;
+        }
+
+        var section = new DifSection
+        {
+            Index = 0,
+            Name = DifSectionScanner.SynthesizeSectionName(0),
+            HasDeclaredName = false,
+            ColumnNames = columnNames,
+            Metadata = postFieldsMetadata,
+            BlockStartOffset = 0,
+            DataStartOffset = dataStartOffset,
+            DataEndOffsetExclusive = dataEndOffsetExclusive,
+            DataEndLineEndOffset = dataEndOffsetExclusive,
+            DeclaredDataRecords = declaredDataRecords,
+        };
+
+        return new DifFileLayout
+        {
+            HeaderMarker = headerMarker,
+            HasFileStartMarker = hasFileStartMarker,
+            HeaderMetadata = headerMetadata,
+            Delimiter = delimiter,
+            Sections = [section],
+            TrailerMetadata = trailerMetadata,
+            TrailerMarker = trailerMarker,
+            HasFileEndMarker = hasFileEndMarker,
+            TrailerStartOffset = dataEndOffsetExclusive,
+            IsValid = true,
+            Diagnostics = diagnostics,
+        };
+    }
+
+    private static FileIndex IndexCore(
+        string path, DifFileLayout? layout, int sectionIndex, IProgress<IndexingProgress>? progress, CancellationToken cancellationToken)
     {
         long fileLength = new FileInfo(path).Length;
         SafeFileHandle fileHandle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.RandomAccess);
@@ -55,64 +168,25 @@ public static class FileIndexer
         try
         {
             var diagnostics = new List<DifDiagnostic>();
+            DifFileLayout resolvedLayout = layout ?? BuildLayout(fileHandle, path, fileLength, diagnostics, cancellationToken);
 
-            int headWindowLength = checked((int)Math.Min(fileLength, DifHeaderParser.HeadWindowBytes));
-            byte[] headBuffer = new byte[headWindowLength];
-            RandomAccessReader.ReadExactly(fileHandle, headBuffer, 0);
-            var forwardResult = DifHeaderParser.ParseHeaderAndFields(headBuffer, diagnostics);
-
-            if (forwardResult is null)
+            if (!resolvedLayout.IsValid)
             {
-                DifFileHeader invalidHeader = DifHeaderParser.CreateInvalidHeader(diagnostics);
-                var invalidIndex = new FileIndex(path, fileLength, fileHandle, invalidHeader,
-                    new UnmanagedArray<RowIndexEntry>(1), new UnmanagedArray<SortKey>(1), diagnostics);
+                DifFileHeader invalidHeader = DifHeaderParser.CreateInvalidHeader(resolvedLayout.Diagnostics);
+                var invalidIndex = new FileIndex(path, fileLength, fileHandle, invalidHeader, resolvedLayout,
+                    new UnmanagedArray<RowIndexEntry>(1), new UnmanagedArray<SortKey>(1), resolvedLayout.Diagnostics);
                 ownershipTransferred = true;
                 return invalidIndex;
             }
 
-            (string headerMarker, bool hasFileStartMarker, Dictionary<string, string> headerMetadata,
-                List<string> columnNames, Dictionary<string, string> postFieldsMetadata, long dataStartOffset) = forwardResult.Value;
-            char delimiter = DifHeaderParser.ResolveDelimiter(headerMetadata, diagnostics);
-
-            long tailWindowStart = DifHeaderParser.ComputeTailWindowStart(dataStartOffset, fileLength);
-            int tailWindowLength = checked((int)(fileLength - tailWindowStart));
-            byte[] tailBuffer = new byte[tailWindowLength];
-            RandomAccessReader.ReadExactly(fileHandle, tailBuffer, tailWindowStart);
-            (Dictionary<string, string> trailerMetadata, long dataEndOffsetExclusive, string trailerMarker, bool hasFileEndMarker) =
-                DifHeaderParser.ParseTrailerAndDataEnd(tailBuffer, tailWindowStart, fileLength, diagnostics);
-
-            int? declaredDataRecords = null;
-            if (trailerMetadata.TryGetValue(DifFormatOptions.DataRecordsKey, out string? recordsText)
-                && int.TryParse(recordsText, out int parsedRecords))
-            {
-                declaredDataRecords = parsedRecords;
-            }
-
-            var header = new DifFileHeader
-            {
-                HeaderMarker = headerMarker,
-                HasFileStartMarker = hasFileStartMarker,
-                HeaderMetadata = headerMetadata,
-                Delimiter = delimiter,
-                ColumnNames = columnNames,
-                PostFieldsMetadata = postFieldsMetadata,
-                TrailerMetadata = trailerMetadata,
-                TrailerMarker = trailerMarker,
-                HasFileEndMarker = hasFileEndMarker,
-                DeclaredDataRecords = declaredDataRecords,
-                DataStartOffset = dataStartOffset,
-                DataEndOffsetExclusive = dataEndOffsetExclusive,
-                IsValid = true,
-                Diagnostics = diagnostics,
-            };
-
+            DifFileHeader header = resolvedLayout.GetSectionHeader(sectionIndex);
             int idColumnIndex = header.ColumnIndexOf("_ID");
 
             (UnmanagedArray<RowIndexEntry> rowIndex, UnmanagedArray<SortKey> sortKeys) = ScanDataRegion(
-                fileHandle, dataStartOffset, dataEndOffsetExclusive, (byte)delimiter, idColumnIndex,
+                fileHandle, header.DataStartOffset, header.DataEndOffsetExclusive, (byte)header.Delimiter, idColumnIndex,
                 fileLength, progress, cancellationToken);
 
-            var result = new FileIndex(path, fileLength, fileHandle, header, rowIndex, sortKeys, diagnostics);
+            var result = new FileIndex(path, fileLength, fileHandle, header, resolvedLayout, rowIndex, sortKeys, resolvedLayout.Diagnostics);
             ownershipTransferred = true;
             return result;
         }
@@ -314,49 +388,59 @@ public static class FileIndexer
         int chunkLength = checked((int)(chunkEnd - chunkStart));
         if (chunkLength <= 0) return;
 
-        byte[] buffer = new byte[chunkLength];
-        RandomAccessReader.ReadExactly(fileHandle, buffer, chunkStart);
-        var chunkSpan = new ReadOnlySpan<byte>(buffer);
-
-        int pos = 0;
-        long rowsSinceLastReport = 0;
-        int posAtLastReport = 0;
-
-        while (pos < chunkSpan.Length)
+        // Rented, not allocated: a chunk buffer is far past the large-object-heap threshold, and
+        // indexing a big file runs one per core — renting keeps those buffers out of the GC's way
+        // (and lets successive chunks on the same worker re-use the same memory).
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(chunkLength);
+        try
         {
-            int lineStartRelative = pos;
-            if (!DifLineScanner.TryReadLine(chunkSpan, ref pos, out ReadOnlySpan<byte> line)) break;
+            RandomAccessReader.ReadExactly(fileHandle, buffer.AsSpan(0, chunkLength), chunkStart);
+            var chunkSpan = new ReadOnlySpan<byte>(buffer, 0, chunkLength);
 
-            ReadOnlySpan<byte> trimmed = DifLineScanner.TrimTrailingCr(line);
-            if (trimmed.Length == 0) continue;
+            int pos = 0;
+            long rowsSinceLastReport = 0;
+            int posAtLastReport = 0;
 
-            long absoluteOffset = chunkStart + lineStartRelative;
-            outRowIndex.Add(new RowIndexEntry(absoluteOffset, trimmed.Length));
-
-            // Always populate a SortKey — even with idColumnIndex < 0 (no "_ID" column),
-            // SortKeyBuilder produces an empty-key entry, and RowSorter's RowIndex tiebreak still
-            // gives a well-defined file-order sort. This keeps SortKeys.Count == RowIndex.Count
-            // unconditionally, so callers (FileViewerSession) can always treat SortKeys as "current
-            // row order" without special-casing files that lack "_ID".
-            //
-            // RowIndex here is only this chunk's local row count — not yet the row's true global
-            // index (this chunk doesn't know its global starting position until every chunk has
-            // finished). ScanDataRegion's merge step corrects it.
-            outSortKeys.Add(SortKeyBuilder.Build(checked((long)outRowIndex.Count - 1), trimmed, delimiter, idColumnIndex));
-
-            rowsSinceLastReport++;
-            if (rowsSinceLastReport >= ProgressReportRowInterval)
+            while (pos < chunkSpan.Length)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                int lineStartRelative = pos;
+                if (!DifLineScanner.TryReadLine(chunkSpan, ref pos, out ReadOnlySpan<byte> line)) break;
+
+                ReadOnlySpan<byte> trimmed = DifLineScanner.TrimTrailingCr(line);
+                if (trimmed.Length == 0) continue;
+
+                long absoluteOffset = chunkStart + lineStartRelative;
+                outRowIndex.Add(new RowIndexEntry(absoluteOffset, trimmed.Length));
+
+                // Always populate a SortKey — even with idColumnIndex < 0 (no "_ID" column),
+                // SortKeyBuilder produces an empty-key entry, and RowSorter's RowIndex tiebreak still
+                // gives a well-defined file-order sort. This keeps SortKeys.Count == RowIndex.Count
+                // unconditionally, so callers (FileViewerSession) can always treat SortKeys as "current
+                // row order" without special-casing files that lack "_ID".
+                //
+                // RowIndex here is only this chunk's local row count — not yet the row's true global
+                // index (this chunk doesn't know its global starting position until every chunk has
+                // finished). ScanDataRegion's merge step corrects it.
+                outSortKeys.Add(SortKeyBuilder.Build(checked((long)outRowIndex.Count - 1), trimmed, delimiter, idColumnIndex));
+
+                rowsSinceLastReport++;
+                if (rowsSinceLastReport >= ProgressReportRowInterval)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    accumulator.Report(rowsSinceLastReport, pos - posAtLastReport);
+                    rowsSinceLastReport = 0;
+                    posAtLastReport = pos;
+                }
+            }
+
+            if (rowsSinceLastReport > 0 || pos > posAtLastReport)
+            {
                 accumulator.Report(rowsSinceLastReport, pos - posAtLastReport);
-                rowsSinceLastReport = 0;
-                posAtLastReport = pos;
             }
         }
-
-        if (rowsSinceLastReport > 0 || pos > posAtLastReport)
+        finally
         {
-            accumulator.Report(rowsSinceLastReport, pos - posAtLastReport);
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 

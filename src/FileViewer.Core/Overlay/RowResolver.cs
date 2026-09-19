@@ -26,8 +26,14 @@ namespace FileViewer.Core.Overlay;
 /// </summary>
 public static class RowResolver
 {
-    /// <summary>Resolves a row, or returns null if it is a tombstone (deleted — never rendered/exported).</summary>
-    public static ResolvedRow? Resolve(long rowIndex, FileIndex fileIndex, EditOverlay overlay, DecodedRowCache cache)
+    /// <summary>
+    /// Resolves a row, or returns null if it is a tombstone (deleted — never rendered/exported).
+    /// <paramref name="overlay"/> may be the live <see cref="EditOverlay"/> or a lock-free
+    /// <see cref="OverlaySnapshot"/>; <paramref name="cache"/> may be null, which decodes the row
+    /// without touching (or evicting anything from) the shared cache — what the bulk scanning paths
+    /// want, since a filter pass would otherwise flush the rows the visible page needs.
+    /// </summary>
+    public static ResolvedRow? Resolve(long rowIndex, FileIndex fileIndex, IOverlayView overlay, DecodedRowCache? cache)
     {
         RowState state = overlay.GetRowState(rowIndex);
         if (state == RowState.Deleted)
@@ -41,7 +47,7 @@ public static class RowResolver
         {
             baseFields = overlay.TryGetAddedRowTemplate(rowIndex, out IReadOnlyList<string> template) ? template : [];
         }
-        else if (cache.TryGet(rowIndex, out DecodedRow? cached))
+        else if (cache is not null && cache.TryGet(rowIndex, out DecodedRow? cached))
         {
             baseFields = cached.FieldValues;
         }
@@ -50,7 +56,7 @@ public static class RowResolver
             ReadOnlySpan<byte> rowBytes = fileIndex.GetRowBytes(rowIndex);
             string[] parsed = DifRowParser.ParseRow(rowBytes, (byte)fileIndex.Header.Delimiter, DifFormatOptions.TextEncoding);
             baseFields = parsed;
-            cache.Set(rowIndex, new DecodedRow(rowIndex, parsed));
+            cache?.Set(rowIndex, new DecodedRow(rowIndex, parsed));
         }
 
         string[] resolvedFields = [.. baseFields]; // defensive copy — never mutate a cached/template array in place

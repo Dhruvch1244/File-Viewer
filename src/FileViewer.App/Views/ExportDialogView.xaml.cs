@@ -58,7 +58,10 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
 
     /// <summary>"{baseName}.{formatToken}.{yyyyMMdd}" — what gets pre-filled into the save dialog; shown in the dialog itself too so the user sees exactly what will be saved before Export is even clicked.</summary>
     public string SuggestedFileName => ExportFileNaming.BuildFileName(
-        _session.FileIndex.FilePath, CurrentFormatToken(), DateOnly.FromDateTime(_selectedDate));
+        _session.FileIndex.FilePath, CurrentFormatToken(), DateOnly.FromDateTime(_selectedDate),
+        // One section of a bulk file exports under its own name, so exporting two of them doesn't
+        // propose the same file name twice.
+        _session.FileIndex.Header.IsMultiSection ? _session.FileIndex.Header.SectionName : null);
 
     public string PreviewText
     {

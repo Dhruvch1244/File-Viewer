@@ -30,9 +30,33 @@ public static partial class ExportFileNaming
         return name;
     }
 
-    /// <summary>Builds "{baseName}.{formatToken}.{date:yyyyMMdd}" from an existing file name/path, a format token ("dif", "out", "csv", "tsv", "json"), and a date.</summary>
-    public static string BuildFileName(string sourceFileName, string formatToken, DateOnly date) =>
-        $"{ExtractBaseName(sourceFileName)}.{formatToken}.{date:yyyyMMdd}";
+    /// <summary>
+    /// Builds "{baseName}.{formatToken}.{date:yyyyMMdd}" from an existing file name/path, a format
+    /// token ("dif", "out", "csv", "tsv", "json"), and a date. <paramref name="sectionName"/> (the
+    /// DATA= name of one section of a bulk file) is folded into the base name when given, so
+    /// exporting two sections of the same file doesn't propose the same name for both.
+    /// </summary>
+    public static string BuildFileName(string sourceFileName, string formatToken, DateOnly date, string? sectionName = null)
+    {
+        string baseName = ExtractBaseName(sourceFileName);
+        if (!string.IsNullOrWhiteSpace(sectionName))
+        {
+            baseName = $"{baseName}_{SanitizeForFileName(sectionName)}";
+        }
+        return $"{baseName}.{formatToken}.{date:yyyyMMdd}";
+    }
+
+    /// <summary>Replaces anything that can't appear in a file name (on any platform, plus '.' which would look like another suffix) with '_'.</summary>
+    private static string SanitizeForFileName(string value)
+    {
+        Span<char> buffer = stackalloc char[value.Length];
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            buffer[i] = char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_';
+        }
+        return new string(buffer).Trim('_');
+    }
 
     [GeneratedRegex(@"\.\d{8}$")]
     private static partial Regex DateSuffixPattern();
