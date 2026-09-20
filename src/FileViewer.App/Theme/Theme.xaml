@@ -7,8 +7,29 @@
          re-theme the app live. See ThemeManager. -->
 
     <!-- ============================== Typography ============================= -->
+    <!-- Segoe UI Variable is Windows 11's system font, tuned for on-screen legibility at UI sizes
+         better than classic Segoe UI (larger x-height, more even stroke weight at small sizes);
+         "Text" is its optical size for body/UI text specifically (as opposed to the "Display" cut,
+         meant for large headings). Segoe UI is the fallback for Windows 10, where Variable isn't
+         installed — WPF's FontFamily list picks the first one actually present, so this costs
+         nothing on either OS. -->
     <FontFamily x:Key="UiFontFamily">Segoe UI Variable Text, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFontFamily">Cascadia Mono, Consolas, Segoe UI</FontFamily>
+
+    <!-- Every small all-caps section label in the app ("FILTERED BY", "MATCH BY TEXT", "RECENT
+         FILES", ...) used to hand-set the same three properties at each call site — consolidated
+         here so there's one place to tune them. Letter-spacing (the usual fix for small all-caps
+         text reading cramped) isn't set: TextBlock.CharacterSpacing doesn't exist as a settable
+         style property on this control in WPF, only on TextElement-derived types like Run inside a
+         FlowDocument, so it isn't available here without wrapping every label's text in a Run — not
+         worth the added markup for a small type of label. 10.5px is a half-step up from the 10px
+         these were before, calibrated so they still read as clearly secondary to body text (12-13px
+         elsewhere) rather than competing with it. -->
+    <Style x:Key="SectionLabelStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
 
     <!-- ============================== Buttons ================================ -->
     <Style x:Key="{x:Type Button}" TargetType="Button">
