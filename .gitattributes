@@ -1,0 +1,11 @@
+# Normalize line endings in source, but never in test fixtures.
+#
+# The DIF fixtures are input to a parser that works in byte offsets, and to an exporter whose whole
+# contract is reproducing a file byte-for-byte. Letting git rewrite their line endings on checkout
+# means the bytes under test differ per platform — which is exactly how a byte-for-byte round-trip
+# test passed on Linux and failed on the Windows CI runner.
+* text=auto
+
+tests/FileViewer.Core.Tests/Fixtures/** -text
+*.dif -text
+*.bin -text

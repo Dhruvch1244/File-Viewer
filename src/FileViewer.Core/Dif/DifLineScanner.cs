@@ -13,6 +13,23 @@ public static class DifLineScanner
     public static ReadOnlySpan<byte> TrimTrailingCr(ReadOnlySpan<byte> line) =>
         line.Length > 0 && line[^1] == (byte)'\r' ? line[..^1] : line;
 
+    /// <summary>
+    /// The line ending the content uses: "\r\n" if the first line break is preceded by a carriage
+    /// return, "\n" otherwise (the default for a file with no line break at all).
+    ///
+    /// Everything that *reads* the format tolerates either, but an export that reproduces a file's
+    /// header and trailer byte-for-byte has to write its rows the same way the source did — writing
+    /// "\n" rows into a file whose copied header and trailer use "\r\n" produces a file with mixed
+    /// line endings that no longer round-trips.
+    /// </summary>
+    public static string DetectLineEnding(ReadOnlySpan<byte> content)
+    {
+        int newLine = content.IndexOf((byte)'\n');
+        return newLine > 0 && content[newLine - 1] == (byte)'\r'
+            ? DifFormatOptions.WindowsLineEnding
+            : DifFormatOptions.UnixLineEnding;
+    }
+
     /// <summary>Index of the next '\n' at or after <paramref name="start"/>, or -1 if none.</summary>
     public static int FindNextNewLine(ReadOnlySpan<byte> data, int start)
     {

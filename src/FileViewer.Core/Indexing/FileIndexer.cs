@@ -148,6 +148,7 @@ public static class FileIndexer
             HasFileStartMarker = hasFileStartMarker,
             HeaderMetadata = headerMetadata,
             Delimiter = delimiter,
+            LineEnding = DifLineScanner.DetectLineEnding(headBuffer),
             Sections = [section],
             TrailerMetadata = trailerMetadata,
             TrailerMarker = trailerMarker,

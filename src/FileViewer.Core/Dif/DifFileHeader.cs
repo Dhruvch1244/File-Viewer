@@ -23,6 +23,13 @@ public sealed class DifFileHeader
     public required IReadOnlyDictionary<string, string> HeaderMetadata { get; init; }
 
     public required char Delimiter { get; init; }
+
+    /// <summary>
+    /// The line ending the source file uses — see <see cref="DifLineScanner.DetectLineEnding"/>.
+    /// A DIF export writes its rows with this so they match the header and trailer bytes it copies
+    /// through unchanged.
+    /// </summary>
+    public string LineEnding { get; init; } = DifFormatOptions.UnixLineEnding;
     public required IReadOnlyList<string> ColumnNames { get; init; }
 
     /// <summary>

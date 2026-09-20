@@ -36,7 +36,10 @@ public sealed class DifExporter(FileIndex sourceFileIndex) : IRowExporter
             sourceFileIndex.CopyRangeTo(stream, 0, header.DataStartOffset);
         }
 
-        _writer = new StreamWriter(stream, DifFormatOptions.TextEncoding, leaveOpen: true) { NewLine = "\n" };
+        // The source's own line ending, not a fixed one: the header and trailer are copied through
+        // byte-for-byte, so rows written with a different ending would leave the export with mixed
+        // line endings and break the round trip this exporter exists to guarantee.
+        _writer = new StreamWriter(stream, DifFormatOptions.TextEncoding, leaveOpen: true) { NewLine = header.LineEnding };
     }
 
     public void WriteRow(ResolvedRow row)
