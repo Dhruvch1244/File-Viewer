@@ -65,6 +65,9 @@ public static class DifFormatOptions
     /// </summary>
     public static readonly string[] ImplicitRecordPrefixColumns = ["_ID", "_ERR", "_SIZE"];
 
+    public const string UnixLineEnding = "\n";
+    public const string WindowsLineEnding = "\r\n";
+
     /// <summary>Used only if a file omits the DELIMITER header key, so the file still opens (PRS §8 Reliability).</summary>
     public const char DefaultDelimiter = '|';
 

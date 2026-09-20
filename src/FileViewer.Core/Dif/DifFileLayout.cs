@@ -16,6 +16,9 @@ public sealed class DifFileLayout
     public bool HasFileStartMarker { get; init; }
     public required IReadOnlyDictionary<string, string> HeaderMetadata { get; init; }
     public required char Delimiter { get; init; }
+
+    /// <summary>The line ending the file uses, so an export of any section reproduces it.</summary>
+    public string LineEnding { get; init; } = DifFormatOptions.UnixLineEnding;
     public required IReadOnlyList<DifSection> Sections { get; init; }
     public required IReadOnlyDictionary<string, string> TrailerMetadata { get; init; }
     public string TrailerMarker { get; init; } = DifFormatOptions.Trailer;
@@ -47,6 +50,7 @@ public sealed class DifFileLayout
             HasFileStartMarker = HasFileStartMarker,
             HeaderMetadata = HeaderMetadata,
             Delimiter = Delimiter,
+            LineEnding = LineEnding,
             ColumnNames = section.ColumnNames,
             PostFieldsMetadata = section.Metadata,
             TrailerMetadata = TrailerMetadata,
@@ -108,6 +112,7 @@ public sealed class DifFileLayout
             HasFileStartMarker = header.HasFileStartMarker,
             HeaderMetadata = header.HeaderMetadata,
             Delimiter = header.Delimiter,
+            LineEnding = header.LineEnding,
             Sections = [section],
             TrailerMetadata = header.TrailerMetadata,
             TrailerMarker = header.TrailerMarker,

@@ -217,12 +217,18 @@ public static class DifSectionScanner
 
         char delimiter = DifHeaderParser.ResolveDelimiter(headerMetadata, diagnostics);
 
+        // Read from the head of the file rather than tracked through the cursor, which trims the
+        // carriage return off every line it hands back.
+        Span<byte> lineEndingProbe = stackalloc byte[Math.Min(4096, checked((int)source.Length))];
+        source.Read(lineEndingProbe, 0);
+
         return new DifFileLayout
         {
             HeaderMarker = headerMarker,
             HasFileStartMarker = hasFileStartMarker,
             HeaderMetadata = headerMetadata,
             Delimiter = delimiter,
+            LineEnding = DifLineScanner.DetectLineEnding(lineEndingProbe),
             Sections = sections,
             TrailerMetadata = trailerMetadata,
             TrailerMarker = trailerMarker,

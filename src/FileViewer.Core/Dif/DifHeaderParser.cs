@@ -46,7 +46,8 @@ public static class DifHeaderParser
             ParseTrailerAndDataEnd(tailWindow, tailWindowStart, content.Length, diagnostics);
 
         return BuildHeader(headerMarker, hasFileStartMarker, headerMetadata, delimiter, columnNames,
-            postFieldsMetadata, trailerMetadata, trailerMarker, hasFileEndMarker, dataStartOffset, dataEndOffsetExclusive, diagnostics);
+            postFieldsMetadata, trailerMetadata, trailerMarker, hasFileEndMarker, dataStartOffset, dataEndOffsetExclusive,
+            DifLineScanner.DetectLineEnding(headWindow), diagnostics);
     }
 
     private static DifFileHeader BuildHeader(
@@ -61,6 +62,7 @@ public static class DifHeaderParser
         bool hasFileEndMarker,
         long dataStartOffset,
         long dataEndOffsetExclusive,
+        string lineEnding,
         List<DifDiagnostic> diagnostics)
     {
         int? declaredDataRecords = null;
@@ -76,6 +78,7 @@ public static class DifHeaderParser
             HasFileStartMarker = hasFileStartMarker,
             HeaderMetadata = headerMetadata,
             Delimiter = delimiter,
+            LineEnding = lineEnding,
             ColumnNames = columnNames,
             PostFieldsMetadata = postFieldsMetadata,
             TrailerMetadata = trailerMetadata,
