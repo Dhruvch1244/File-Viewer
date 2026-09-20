@@ -391,8 +391,8 @@ public partial class MainWindow : Window
         };
         if (options.ColumnScope == ClipboardColumnScope.AllColumns) what += ", all columns";
         ShowToast(payload.Truncated
-            ? $"Copied the first {payload.RowCount:N0} of your rows {what}{columns} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
-            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}{columns}.");
+            ? $"Copied the first {payload.RowCount:N0} of your rows {what} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
+            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}.");
     }
 
     private void OnCancelFilterClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.CancelFilter();
@@ -937,7 +937,6 @@ public partial class MainWindow : Window
 
         _activeFilterColumn = columnName;
         ColumnFilterTitle.Text = $"FILTER — {columnName.ToUpperInvariant()}";
-        ColumnFilterSearchBox.Text = string.Empty;
         _activeFilterOptions = [];
         _activeFilterOptionsView = null;
         ColumnFilterValuesList.ItemsSource = null;
@@ -972,10 +971,6 @@ public partial class MainWindow : Window
         _activeFilterOptionsView = view;
         ColumnFilterValuesList.ItemsSource = view;
 
-        // The search box was interactive the whole time the values were loading — if the user
-        // typed into it before this point, that text was silently ignored (no view existed yet to
-        // filter). Apply whatever it currently holds now that there's finally a view to apply it to.
-        ApplyColumnFilterSearch();
     }
 
     // ============================== Column menu: values vs stats ==============================
@@ -1097,16 +1092,6 @@ public partial class MainWindow : Window
         await grid.SetColumnPatternFilterAsync(columnName, pattern, useRegex);
     }
 
-    private void OnColumnFilterSearchChanged(object sender, TextChangedEventArgs e) => ApplyColumnFilterSearch();
-
-    private void ApplyColumnFilterSearch()
-    {
-        if (_activeFilterOptionsView is null) return;
-        string text = ColumnFilterSearchBox.Text;
-        _activeFilterOptionsView.Filter = o => o is ColumnFilterValueOption option
-            && (string.IsNullOrEmpty(text) || option.DisplayText.Contains(text, StringComparison.OrdinalIgnoreCase));
-        _activeFilterOptionsView.Refresh();
-    }
 
     private void OnColumnFilterSelectAllClick(object sender, RoutedEventArgs e)
     {

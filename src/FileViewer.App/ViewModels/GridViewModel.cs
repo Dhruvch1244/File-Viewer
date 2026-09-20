@@ -639,9 +639,7 @@ public sealed class GridViewModel : ObservableObject
 
         return await Task.Run(() =>
         {
-            string text = format == ClipboardFormat.Json
-                ? BuildJson(session, columnNames, columnIndexes, rows)
-                : BuildDelimited(session, columnNames, columnIndexes, rows, format, options.IncludeHeaders);
+            string text = BuildDelimited(session, columnNames, columnIndexes, rows, options.Format, options.IncludeHeaders);
             return new ClipboardPayload(text, rows.Count, truncated);
         });
     }
@@ -683,38 +681,6 @@ public sealed class GridViewModel : ObservableObject
         return builder.ToString();
     }
 
-    /// <summary>
-    /// The same shape <see cref="FileViewer.Core.Export.JsonExporter"/> writes to a file — a JSON
-    /// array of objects, column name to value — via the same <see cref="Utf8JsonWriter"/> escaping
-    /// rather than hand-rolled string building, so a value with a quote or a control character in it
-    /// comes out valid JSON here exactly as it would from a real export.
-    /// </summary>
-    private static string BuildJson(
-        FileViewerSession session, IReadOnlyList<string> columnNames, int[] columnIndexes, List<long> rows)
-    {
-        using var stream = new System.IO.MemoryStream();
-        using (var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions { Indented = false }))
-        {
-            writer.WriteStartArray();
-            foreach (long rowIndex in rows)
-            {
-                Core.Overlay.ResolvedRow? resolved = session.Resolve(rowIndex);
-                if (resolved is null) continue; // deleted while we were building
-
-                writer.WriteStartObject();
-                for (int i = 0; i < columnIndexes.Length; i++)
-                {
-                    int columnIndex = columnIndexes[i];
-                    string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
-                    writer.WriteString(columnNames[columnIndex], value);
-                }
-                writer.WriteEndObject();
-            }
-            writer.WriteEndArray();
-        }
-
-        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
-    }
 
     /// <summary>
     /// A JSON array of row objects (column name → value), one property per column in
@@ -978,21 +944,6 @@ public enum ClipboardFormat
     Json,
 }
 
-/// <summary>
-/// Which columns a copy takes. Export always writes every column the file declares (see
-/// <c>ExportRunner</c>, which passes <c>FileIndex.Header.ColumnNames</c> straight through); Copy
-/// used to be locked to whatever the grid currently shows, usually a subset — only the first
-/// <see cref="GridViewModel.DefaultVisibleColumnCount"/> are on by default for a wide file, and a
-/// bulk section can have columns hidden that still matter to whoever is receiving the paste.
-/// </summary>
-public enum ClipboardColumnScope
-{
-    /// <summary>Exactly what the grid is showing right now, in the order it's showing them.</summary>
-    VisibleColumns,
-
-    /// <summary>Every field this row's original record declares, in file order — matches what Export writes.</summary>
-    AllColumns,
-}
 
 /// <summary>
 /// One entry of the Copy dropdown. The plain Copy button is <see cref="Default"/>; the rest exist
