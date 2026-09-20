@@ -9,9 +9,9 @@
     <!-- One place the released version is set. Without it every assembly reports 1.0.0 and a
          downloaded build can't be told apart from any other. Keep in step with the tag the release
          workflow is run against (see CHANGELOG.md). -->
-    <Version>0.1.6</Version>
-    <AssemblyVersion>0.1.6.0</AssemblyVersion>
-    <FileVersion>0.1.6.0</FileVersion>
+    <Version>0.1.7</Version>
+    <AssemblyVersion>0.1.7.0</AssemblyVersion>
+    <FileVersion>0.1.7.0</FileVersion>
     <Product>Bloomberg File Viewer</Product>
     <Authors>Dhruv Choudhary</Authors>
     <Copyright>Copyright © Dhruv Choudhary</Copyright>
