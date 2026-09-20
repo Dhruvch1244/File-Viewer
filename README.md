@@ -135,6 +135,7 @@ src/FileViewer.App/        WPF UI: the virtualized grid, view models, dialogs, t
 tests/FileViewer.Core.Tests/        xUnit tests for FileViewer.Core
 tests/FileViewer.App.Model.Tests/   xUnit tests for FileViewer.App.Model
 benchmarks/FileViewer.Benchmarks/   BenchmarkDotNet suite (see its own README)
+test-files/                         Sample DIF files, one per supported shape (see its own README)
 ```
 
 `FileViewer.Core` has no dependency on WPF or any UI framework — it's a plain library, so the
@@ -150,6 +151,14 @@ Requires the .NET 8 SDK (or newer, as long as `net8.0` / `net8.0-windows` target
 ```
 dotnet build FileViewer.slnx
 dotnet run --project src/FileViewer.App
+```
+
+There are sample files in [`test-files/`](test-files/) covering every shape the viewer handles —
+both header dialects, each delimiter, LF/CRLF/mixed line endings, bulk multi-section exports, mixed
+column types, a 25,000-row file, and the malformed cases. Open one straight from the command line:
+
+```
+dotnet run --project src/FileViewer.App -- test-files/30-bulk-named-sections.dif
 ```
 
 ## Running tests

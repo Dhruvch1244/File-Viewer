@@ -9,3 +9,9 @@
 tests/FileViewer.Core.Tests/Fixtures/** -text
 *.dif -text
 *.bin -text
+
+# The sample files are inputs to the same byte-exact parser, for the same reason. The README and
+# the generator are ordinary source and keep their diffs.
+test-files/** -text
+test-files/README.md text
+test-files/generate.py text
