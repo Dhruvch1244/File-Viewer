@@ -59,16 +59,25 @@ public static class DifSectionScanner
         }
 
         string headerMarker;
+        bool hasFileStartMarker = false;
         if (LineIsMarker(firstLine, DifFormatOptions.HeaderStart)) headerMarker = DifFormatOptions.HeaderStart;
         else if (LineIsMarker(firstLine, DifFormatOptions.HeaderStartAlt)) headerMarker = DifFormatOptions.HeaderStartAlt;
+        else if (LineIsMarker(firstLine, DifFormatOptions.FileStart))
+        {
+            // A bulk delivery is a run of whole file envelopes with no INAHDR/IMAHDR above them —
+            // START-OF-FILE is the first line of the file itself. There is no header marker to
+            // record, and none is invented: the exporter copies these bytes through rather than
+            // rebuilding them, so an empty marker costs nothing.
+            headerMarker = string.Empty;
+            hasFileStartMarker = true;
+        }
         else
         {
             diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Error,
-                $"File does not start with '{DifFormatOptions.HeaderStart}' or '{DifFormatOptions.HeaderStartAlt}'.", 0));
+                $"File does not start with '{DifFormatOptions.HeaderStart}', '{DifFormatOptions.HeaderStartAlt}' or '{DifFormatOptions.FileStart}'.", 0));
             return DifFileLayout.Invalid(diagnostics);
         }
 
-        bool hasFileStartMarker = false;
         bool hasFileEndMarker = false;
         bool trailerSeen = false;
         string trailerMarker = DifFormatOptions.Trailer;
@@ -124,6 +133,13 @@ public static class DifSectionScanner
             if (LineIsMarker(line, DifFormatOptions.FileStart))
             {
                 hasFileStartMarker = true;
+                // A bulk delivery concatenates whole envelopes — each one its own START-OF-FILE,
+                // preamble, DATA= name, fields, data, per-envelope stats and END-OF-FILE. So a
+                // second START-OF-FILE re-opens the body: what follows names the next section, and
+                // the previous END-OF-FILE did not, after all, begin the file trailer. Without this
+                // every envelope after the first lost its DATA= name to trailerMetadata and showed
+                // up as "Section 2", "Section 3", ...
+                trailerSeen = false;
                 continue;
             }
             if (LineIsMarker(line, DifFormatOptions.FileEnd))

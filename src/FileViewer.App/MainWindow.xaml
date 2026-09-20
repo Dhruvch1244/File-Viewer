@@ -237,8 +237,16 @@
                         <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
+                                <!-- Split button: Copy alone does the common thing (selected rows, with
+                                     headers, tab-separated) so the default stays one click, and the caret
+                                     holds the variants rather than making the toolbar carry four buttons. -->
                                 <Button Content="Copy" Style="{StaticResource ToolbarButtonStyle}" Click="OnCopyClick"
+                                        Padding="10,6,6,6"
                                         ToolTip="Copy the selected rows as tab-separated text (Ctrl+C) — pastes straight into Excel" />
+                                <Button x:Name="CopyOptionsButton" Content="▾" Style="{StaticResource ToolbarButtonStyle}"
+                                        Padding="4,6,8,6" FontSize="10" Click="OnCopyOptionsClick"
+                                        AutomationProperties.Name="Copy options"
+                                        ToolTip="Other ways to copy — without headers, as CSV, or every row in view" />
                                 <Button x:Name="FileInfoButton" Content="File info" Style="{StaticResource ToolbarButtonStyle}" Click="OnFileInfoClick"
                                         ToolTip="Header metadata, section details and any parser warnings for this file" />
                             </StackPanel>
@@ -275,11 +283,25 @@
                  table in its own right (its own columns and rows) and is indexed the first time it
                  is opened, not when the file is. -->
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
-                    Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                    Visibility="{Binding ActiveTab.IsFromBulkFile, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
                 <DockPanel Margin="16,8">
-                    <TextBlock DockPanel.Dock="Left" Text="SECTIONS" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <!-- Names the shape of the file, not just "sections": a bulk delivery is several
+                         whole exports in one file, each with its own columns, and that is worth saying
+                         before someone wonders why the columns changed when they clicked a chip. -->
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding ActiveTab.SectionBarLabel}" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentDarkBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <Button DockPanel.Dock="Right" Content="Open all in tabs" Style="{StaticResource ToolbarButtonStyle}"
+                            Padding="10,4" FontSize="12" Margin="10,0,0,0" Click="OnOpenAllSectionsInTabsClick"
+                            Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}"
+                            ToolTip="Give every section its own tab, so they are all on screen at once instead of one click apart" />
+                    <!-- A tab pinned to one section has no chips to show — the other sections are
+                         other tabs now — but it still needs to say that it is part of a bulk file
+                         and that these columns are this section's own. -->
+                    <TextBlock Text="{Binding ActiveTab.PinnedSectionSummary}" FontSize="12" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondaryBrush}"
+                               Visibility="{Binding ActiveTab.IsPinnedToOneSection, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                  Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
                         <ItemsControl ItemsSource="{Binding ActiveTab.Sections}" ItemTemplate="{StaticResource FileSectionTemplate}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -384,7 +406,7 @@
             <!-- "What am I filtering by" — every active search/column-value/column-pattern filter
                  as a removable chip, so it's never a mystery why fewer rows are showing. -->
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
-                    Visibility="{Binding Grid.HasActiveFilters, Converter={StaticResource BoolToVisibilityConverter}}">
+                    Visibility="{Binding Grid.HasActiveFilters, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
                 <DockPanel Margin="16,8">
                     <TextBlock DockPanel.Dock="Left" Text="FILTERED BY" FontSize="10" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
@@ -432,17 +454,18 @@
                  realizes only the rows on screen and rows are read and decoded only when asked for,
                  so showing everything is a scroll, not a load. The page buttons hide themselves in
                  that mode rather than sitting there disabled. -->
-            <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                    Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}">
                 <DockPanel Margin="16,8">
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Text="{Binding Grid.RowRangeLabel}"
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
                         <TextBlock Text="Filtering…" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
                                    Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
-                                   Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                   Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
                         <Button Content="Stop" Style="{StaticResource ToolbarButtonStyle}" Padding="8,3" FontSize="11" Margin="8,0,0,0"
                                 Click="OnCancelFilterClick" ToolTip="Stop filtering and keep the rows currently shown"
-                                Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
                     </StackPanel>
 
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
@@ -477,6 +500,16 @@
 
             <!-- ============================== Grid / welcome screen ==================== -->
             <Grid>
+            <!-- ColumnWidth/MinColumnWidth are set, and column virtualization is off, on purpose.
+                 Only the three fixed columns (select/view/delete) carry an explicit Width; the data
+                 columns are built in code-behind with none, so they fell back to auto-sizing. Column
+                 virtualization realizes only the columns in view, so that auto-size measured against
+                 cells that did not exist yet and settled at zero width — which takes the header with
+                 it, so every data column disappeared and the grid looked empty. Rows are what there
+                 are millions of and EnableRowVirtualization still handles those; at most
+                 GridViewModel.DefaultVisibleColumnCount (20) columns are ever realized, so
+                 virtualizing columns bought nothing to begin with. A concrete default width also
+                 avoids re-measuring every realized row whenever the page changes. -->
             <DataGrid x:Name="RowsDataGrid"
                       Margin="16"
                       Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}"
@@ -491,7 +524,9 @@
                       CanUserReorderColumns="True"
                       CanUserSortColumns="False"
                       EnableRowVirtualization="True"
-                      EnableColumnVirtualization="True"
+                      EnableColumnVirtualization="False"
+                      ColumnWidth="160"
+                      MinColumnWidth="60"
                       RowHeight="28"
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
@@ -618,6 +653,18 @@
                     </StackPanel>
                 </Grid>
             </Border>
+
+            <!-- Transient confirmation, over the grid rather than in the status bar: a copy gives no
+                 other feedback at all, and a grey line at the bottom of the window is not where
+                 anyone is looking after pressing Ctrl+C. Fades itself out; see ShowToast. -->
+            <Border x:Name="Toast" Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,32"
+                    Background="{DynamicResource TextPrimaryBrush}" CornerRadius="8" Padding="18,10">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.18" BlurRadius="20" ShadowDepth="3" Direction="270" />
+                </Border.Effect>
+                <TextBlock x:Name="ToastText" Foreground="{DynamicResource SurfaceBrush}" FontSize="12.5" FontWeight="SemiBold" />
+            </Border>
             </Grid>
         </DockPanel>
 
@@ -728,6 +775,62 @@
             </Border>
         </Popup>
 
+        <!-- ============================== Copy options ============================ -->
+        <!-- Each entry names what lands on the clipboard, with the reason underneath, because
+             "Copy as CSV" and "Copy without headers" are indistinguishable from the default until
+             you have already pasted somewhere and looked. -->
+        <Popup x:Name="CopyOptionsPopup" PlacementTarget="{Binding ElementName=CopyOptionsButton}" Placement="Bottom"
+               StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="8" Width="300" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
+                <StackPanel>
+                    <TextBlock Text="COPY" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,4,8,8" />
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyDefaultMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Selected rows" FontSize="12.5" />
+                            <TextBlock Text="With headers, tab-separated — what the Copy button does"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyWithoutHeadersMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Selected rows, no headers" FontSize="12.5" />
+                            <TextBlock Text="Values only — for pasting under rows you already have"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyAsCsvMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Selected rows as CSV" FontSize="12.5" />
+                            <TextBlock Text="Commas and quoting, the same as an exported .csv"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="8,6" />
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyAllRowsMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Every row in view" FontSize="12.5" />
+                            <TextBlock Text="Everything the filters leave, across all pages — ticked or not"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Popup>
+
         <!-- ============================== Column menu (values / stats) ============= -->
         <!-- Two views of one column: the Excel-style value picker, and a summary of what the column
              actually holds — distinct count, blanks, extremes, and the numeric totals when the values
@@ -752,26 +855,77 @@
                          a header click is already how you resize and reorder, and this is where a
                          user goes looking for what a column can do. -->
                     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                             <Button Content="Sort A→Z" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortAscendingClick" />
                             <Button Content="Sort Z→A" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortDescendingClick" />
-                            <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnClearSortClick"
+                            <!-- "Clear sort", not "Clear": there is a second Clear further down for the
+                                 value ticks, and two unqualified Clears in one popup say nothing about
+                                 which is which. -->
+                            <Button Content="Clear sort" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnClearSortClick"
                                     ToolTip="Back to file order" />
                         </StackPanel>
-                        <TextBox x:Name="ColumnPatternBox" Margin="0,0,0,6" KeyDown="OnColumnPatternBoxKeyDown"
-                                 ToolTip="Show only rows whose value in this column matches. Press Enter to apply." />
+
+                        <!-- The two ways to filter one column are stacked with nothing saying so, which
+                             reads as one confusing form. Each gets a heading, and the second says "or"
+                             so the relationship between them is legible at a glance. -->
+                        <TextBlock Text="MATCH BY TEXT" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                        <Grid Margin="0,0,0,6">
+                            <TextBox x:Name="ColumnPatternBox" KeyDown="OnColumnPatternBoxKeyDown"
+                                     AutomationProperties.Name="Match this column by text"
+                                     ToolTip="Show only rows whose value in this column matches. Press Enter to apply." />
+                            <TextBlock Text="Contains…  (Enter to apply)" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnPatternBox}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <StackPanel Orientation="Horizontal">
-                            <CheckBox x:Name="ColumnPatternRegexBox" Content="Regex" VerticalAlignment="Center" FontSize="12" />
+                            <CheckBox x:Name="ColumnPatternRegexBox" Content="Regex" VerticalAlignment="Center" FontSize="12"
+                                      ToolTip="Treat the text above as a regular expression instead of a substring" />
                             <Button Content="Apply" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Margin="8,0,0,0" Click="OnColumnPatternApplyClick" />
                         </StackPanel>
                     </StackPanel>
 
                     <Grid>
                         <DockPanel x:Name="ColumnValuesPanel">
-                            <TextBox x:Name="ColumnFilterSearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="OnColumnFilterSearchChanged" />
+                            <TextBlock DockPanel.Dock="Top" Text="OR PICK FROM VALUES" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                            <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                                <TextBox x:Name="ColumnFilterSearchBox" TextChanged="OnColumnFilterSearchChanged"
+                                         AutomationProperties.Name="Search values"
+                                         ToolTip="Narrows the list below. Select all / Deselect all then apply to just what the search leaves showing." />
+                                <TextBlock Text="Search values…" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnFilterSearchBox}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <!-- "Deselect all" rather than "Clear": it already unticked everything, but
+                                 next to a "Clear sort" button "Clear" reads as "clear the filter", which
+                                 is the opposite of what ticking nothing then applying does. Both buttons
+                                 act on whatever the search above leaves showing, which is why they say so. -->
                             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick" />
-                                <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick" />
+                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick"
+                                        ToolTip="Tick every value currently listed" />
+                                <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick"
+                                        ToolTip="Untick every value currently listed" />
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                                 <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
@@ -785,7 +939,7 @@
                             <!-- Shown when the column has more distinct values than the lookup collects, so a
                                  partial list is never presented as the complete set. -->
                             <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="11"
-                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or the column's filter row."
+                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or match by text instead."
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <ItemsControl x:Name="ColumnFilterValuesList">

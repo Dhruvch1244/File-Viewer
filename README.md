@@ -38,14 +38,19 @@ virtualized scrolling instead of loading the whole file into memory.
   match are the context you're reading.
 - **Several files open at once, as tabs.** Each tab has its own rows, edits, sort, filters and
   column layout, so comparing two files doesn't mean reopening one to look at the other.
-- **Bulk (multi-section) files, detected automatically.** A bulk export repeats the whole
-  `START-OF-FIELDS` … `END-OF-DATA` block once per requested field, each block naming itself with a
-  `DATA=<something>` attribute and declaring its own columns. Open one and every section appears in
-  a section bar, each as its own table. Detection is by content as well as by the "bulk" naming
-  convention, so a bulk file that isn't named like one still opens correctly. Sections are indexed
-  the first time you open them, not when the file opens — a ten-section file costs one structural
-  scan plus the sections you actually look at. Export writes the section you're on as an ordinary
-  single-section DIF file — or every section at once, one file each.
+- **Bulk (multi-section) files, detected automatically, in either shape they come in.** Either a
+  single `INAHDR`/`IMAHDR` envelope repeating `START-OF-FIELDS` … `END-OF-DATA` once per requested
+  field, or several complete whole-file envelopes — each its own
+  `START-OF-FILE` … `DATA=<name>` … `END-OF-FILE` — concatenated one after another with no single
+  outer header at all. Both name each section with a `DATA=<something>` attribute and declare their
+  own columns. Open one and every section appears in a section bar, each as its own table. Detection
+  is by content as well as by the "bulk" naming convention, so a bulk file that isn't named like one
+  still opens correctly. Sections are indexed the first time you open them, not when the file opens
+  — a ten-section file costs one structural scan plus the sections you actually look at.
+  **Open all in tabs** splits every section into its own tab at once; any edits already made move
+  with their section rather than being discarded, since the same indexed session carries over
+  instead of being re-read. Export writes the section you're on as an ordinary single-section DIF
+  file — or every section at once, one file each.
 - **Show as many rows as you want.** Rows per page runs from 50 up to **All rows**, which turns
   paging off and scrolls through the whole result set. That isn't the expensive option it sounds
   like: the grid only ever builds the rows on screen, and a row is read from the file and decoded

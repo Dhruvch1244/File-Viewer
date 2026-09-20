@@ -129,20 +129,27 @@ public static class DifHeaderParser
         if (!DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> firstLine))
         {
             diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Error,
-                $"File does not start with '{DifFormatOptions.HeaderStart}' or '{DifFormatOptions.HeaderStartAlt}'.", 0));
+                $"File does not start with '{DifFormatOptions.HeaderStart}', '{DifFormatOptions.HeaderStartAlt}' or '{DifFormatOptions.FileStart}'.", 0));
             return null;
         }
         string headerMarker;
+        bool hasFileStartMarker = false;
         if (DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.HeaderStart)) headerMarker = DifFormatOptions.HeaderStart;
         else if (DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.HeaderStartAlt)) headerMarker = DifFormatOptions.HeaderStartAlt;
+        else if (DifLineScanner.LineEqualsMarker(firstLine, DifFormatOptions.FileStart))
+        {
+            // Some deliveries have no INAHDR/IMAHDR at all — START-OF-FILE is the file's own first
+            // line. Mirrors DifSectionScanner, which accepts the same opening for bulk files.
+            headerMarker = string.Empty;
+            hasFileStartMarker = true;
+        }
         else
         {
             diagnostics.Add(new DifDiagnostic(DifDiagnosticSeverity.Error,
-                $"File does not start with '{DifFormatOptions.HeaderStart}' or '{DifFormatOptions.HeaderStartAlt}'.", 0));
+                $"File does not start with '{DifFormatOptions.HeaderStart}', '{DifFormatOptions.HeaderStartAlt}' or '{DifFormatOptions.FileStart}'.", 0));
             return null;
         }
 
-        bool hasFileStartMarker = false;
         var headerMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         bool foundFieldsStart = false;
         while (DifLineScanner.TryReadLine(headWindow, ref pos, out ReadOnlySpan<byte> line))

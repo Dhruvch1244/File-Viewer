@@ -595,15 +595,21 @@ public sealed class GridViewModel : ObservableObject
     /// Built on a background thread (it resolves rows) and handed back as a string: putting it on
     /// the clipboard is the window's job, since that has to happen on the UI thread.
     /// </summary>
-    public async Task<ClipboardPayload> BuildClipboardTextAsync()
+    public Task<ClipboardPayload> BuildClipboardTextAsync() => BuildClipboardTextAsync(ClipboardOptions.Default);
+
+    /// <inheritdoc cref="BuildClipboardTextAsync()"/>
+    /// <param name="options">Which rows to take, in which format, with or without a header line.</param>
+    public async Task<ClipboardPayload> BuildClipboardTextAsync(ClipboardOptions options)
     {
         int[] columnIndexes = [.. Columns.Where(column => column.IsVisible).Select(column => column.Index)];
         if (columnIndexes.Length == 0) return new ClipboardPayload(string.Empty, 0, false);
 
         IReadOnlyList<long> rowsInView = Rows.GetAllRowIndices();
-        List<long> rows = Selection.Count > 0
-            ? [.. Selection.Resolve(rowsInView)]
-            : SelectedRow is { } focused ? [focused.RowIndex] : [];
+        List<long> rows = options.Scope == ClipboardScope.AllRowsInView
+            ? [.. rowsInView]
+            : Selection.Count > 0
+                ? [.. Selection.Resolve(rowsInView)]
+                : SelectedRow is { } focused ? [focused.RowIndex] : [];
 
         if (rows.Count == 0) return new ClipboardPayload(string.Empty, 0, false);
 
@@ -612,16 +618,22 @@ public sealed class GridViewModel : ObservableObject
 
         FileViewerSession session = Session;
         IReadOnlyList<string> columnNames = ColumnNames;
+        bool csv = options.Format == ClipboardFormat.Csv;
+        char separator = csv ? ',' : '\t';
 
         return await Task.Run(() =>
         {
             var builder = new StringBuilder();
-            for (int i = 0; i < columnIndexes.Length; i++)
+
+            if (options.IncludeHeaders)
             {
-                if (i > 0) builder.Append('\t');
-                builder.Append(columnNames[columnIndexes[i]]);
+                for (int i = 0; i < columnIndexes.Length; i++)
+                {
+                    if (i > 0) builder.Append(separator);
+                    builder.Append(Encode(columnNames[columnIndexes[i]], csv));
+                }
+                builder.Append('\n');
             }
-            builder.Append('\n');
 
             foreach (long rowIndex in rows)
             {
@@ -630,21 +642,37 @@ public sealed class GridViewModel : ObservableObject
 
                 for (int i = 0; i < columnIndexes.Length; i++)
                 {
-                    if (i > 0) builder.Append('\t');
+                    if (i > 0) builder.Append(separator);
                     int columnIndex = columnIndexes[i];
-                    string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
-                    // Tabs and newlines inside a value would break the row/column structure a
-                    // spreadsheet reads back, so they collapse to spaces — the same trade the TSV
-                    // exporter makes.
-                    builder.Append(value.IndexOfAny(['\t', '\r', '\n']) < 0
-                        ? value
-                        : value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' '));
+                    builder.Append(Encode(
+                        columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty,
+                        csv));
                 }
                 builder.Append('\n');
             }
 
             return new ClipboardPayload(builder.ToString(), rows.Count, truncated);
         });
+    }
+
+    /// <summary>
+    /// CSV quotes a value that contains the delimiter, a quote or a newline, doubling embedded
+    /// quotes — the same rule <c>CsvExporter</c> writes files by, so a pasted copy and an exported
+    /// file agree. Tab-separated text has no quoting convention a spreadsheet reads back, so there
+    /// the separators inside a value collapse to spaces instead, as the TSV exporter does.
+    /// </summary>
+    private static string Encode(string value, bool csv)
+    {
+        if (csv)
+        {
+            return value.IndexOfAny([',', '"', '\r', '\n']) < 0
+                ? value
+                : "\"" + value.Replace("\"", "\"\"") + "\"";
+        }
+
+        return value.IndexOfAny(['\t', '\r', '\n']) < 0
+            ? value
+            : value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
     }
 
     /// <summary>Stops a filter pass that is still running — see <see cref="VirtualizingRowCollection"/>.</summary>
@@ -815,6 +843,39 @@ public sealed class GridViewModel : ObservableObject
 /// <param name="RowCount">How many rows it covers.</param>
 /// <param name="Truncated">True if the selection was larger than <see cref="GridViewModel.MaxClipboardRows"/>.</param>
 public readonly record struct ClipboardPayload(string Text, int RowCount, bool Truncated);
+
+/// <summary>Which rows a copy takes.</summary>
+public enum ClipboardScope
+{
+    /// <summary>The ticked rows, or the focused row when nothing is ticked.</summary>
+    SelectedRows,
+
+    /// <summary>Every row the current filters leave, ticked or not — across pages, not just this one.</summary>
+    AllRowsInView,
+}
+
+/// <summary>Which text format a copy produces.</summary>
+public enum ClipboardFormat
+{
+    /// <summary>Tab-separated: what a spreadsheet pastes into cells without an import step.</summary>
+    TabSeparated,
+
+    /// <summary>Comma-separated with the usual quoting, for pasting into a text file or a tool that wants CSV.</summary>
+    Csv,
+}
+
+/// <summary>
+/// One entry of the Copy dropdown. The plain Copy button is <see cref="Default"/>; the rest exist
+/// because "copy" means something different depending on where it is going — a spreadsheet wants
+/// headers and tabs, a diff or a config file usually wants neither.
+/// </summary>
+public readonly record struct ClipboardOptions(
+    ClipboardScope Scope = ClipboardScope.SelectedRows,
+    ClipboardFormat Format = ClipboardFormat.TabSeparated,
+    bool IncludeHeaders = true)
+{
+    public static readonly ClipboardOptions Default = new();
+}
 
 /// <summary>A column's remembered on-screen size and position — see <see cref="GridViewModel.ColumnLayouts"/>.</summary>
 /// <param name="Width">Rendered width in pixels, or 0 if it was never measured.</param>

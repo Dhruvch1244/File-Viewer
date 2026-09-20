@@ -60,6 +60,26 @@ public sealed class FileSectionViewModel(DifSection section, GridPreferences pre
     }
 
     /// <summary>
+    /// Hands this section's indexed session to another tab and gives up ownership, so disposing
+    /// this one leaves the session alone. Used when a bulk file's tab is split into one tab per
+    /// section: the session is what carries the edit overlay, so moving it rather than dropping it
+    /// and re-indexing is what keeps edits across the split — and saves re-reading a section that
+    /// has already been read. Returns null if this section was never opened, or does not own its
+    /// session (an extracted view, which borrows one).
+    /// </summary>
+    internal FileViewerSession? DetachSession()
+    {
+        if (_session is null || !_ownsSession) return null;
+
+        FileViewerSession session = _session;
+        _ownsSession = false;
+        Grid?.Rows.Dispose();
+        Grid = null;
+        _session = null;
+        return session;
+    }
+
+    /// <summary>
     /// Builds a section over rows pulled out of another view: the same file, the same columns, the
     /// same edits — a fixed subset of the rows. The session belongs to the view it came from and is
     /// deliberately not disposed here; the extracted view is closed when that one is.

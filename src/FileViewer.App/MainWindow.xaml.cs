@@ -37,6 +37,14 @@ public partial class MainWindow : Window
     private ICollectionView? _activeFilterOptionsView;
     private DispatcherTimer? _pageSizeDebounceTimer;
 
+    /// <summary>How long a toast stays at full opacity before it starts fading.</summary>
+    private static readonly TimeSpan ToastDwell = TimeSpan.FromMilliseconds(2600);
+
+    private readonly DispatcherTimer _toastTimer = new() { Interval = ToastDwell };
+
+    /// <summary>Bumped by every <see cref="ShowToast"/> so a fade left over from the previous toast can tell it has been superseded and leave the new one alone.</summary>
+    private int _toastGeneration;
+
     /// <summary>The header TextBlock for each data column — <see cref="UpdateColumnHeaderText"/> updates these directly now that <c>DataGridColumn.Header</c> is a Grid (name + menu button), not a plain string.</summary>
     private readonly Dictionary<string, TextBlock> _columnHeaderTextBlocks = new();
 
@@ -60,6 +68,7 @@ public partial class MainWindow : Window
         DataContext = _viewModel;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.ConfirmDiscardingEdits = ConfirmDiscardingEdits;
+        _toastTimer.Tick += OnToastTimerTick;
         Loaded += OnWindowLoaded;
     }
 
@@ -166,7 +175,7 @@ public partial class MainWindow : Window
                 if (RowsDataGrid.IsKeyboardFocusWithin)
                 {
                     e.Handled = true;
-                    await CopySelectionAsync();
+                    await CopySelectionAsync(ClipboardOptions.Default);
                 }
                 break;
 
@@ -276,6 +285,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Section bar (bulk files): switches the active tab to one of its DATA= sections, indexing it on first use.</summary>
+    private async void OnOpenAllSectionsInTabsClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.ActiveTab is { } tab) await _viewModel.OpenAllSectionsAsTabsAsync(tab);
+    }
+
     private async void OnSectionChipClick(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: FileSectionViewModel section }) return;
@@ -300,16 +314,44 @@ public partial class MainWindow : Window
     private void OnColumnsButtonClick(object sender, RoutedEventArgs e) => ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
 
     /// <summary>Copies the ticked rows (or the focused one) as tab-separated text, ready to paste into a spreadsheet.</summary>
-    private async void OnCopyClick(object sender, RoutedEventArgs e) => await CopySelectionAsync();
+    private async void OnCopyClick(object sender, RoutedEventArgs e) => await CopySelectionAsync(ClipboardOptions.Default);
 
-    private async Task CopySelectionAsync()
+    private void OnCopyOptionsClick(object sender, RoutedEventArgs e) => CopyOptionsPopup.IsOpen = !CopyOptionsPopup.IsOpen;
+
+    private async void OnCopyDefaultMenuClick(object sender, RoutedEventArgs e)
+    {
+        CopyOptionsPopup.IsOpen = false;
+        await CopySelectionAsync(ClipboardOptions.Default);
+    }
+
+    private async void OnCopyWithoutHeadersMenuClick(object sender, RoutedEventArgs e)
+    {
+        CopyOptionsPopup.IsOpen = false;
+        await CopySelectionAsync(ClipboardOptions.Default with { IncludeHeaders = false });
+    }
+
+    private async void OnCopyAsCsvMenuClick(object sender, RoutedEventArgs e)
+    {
+        CopyOptionsPopup.IsOpen = false;
+        await CopySelectionAsync(ClipboardOptions.Default with { Format = ClipboardFormat.Csv });
+    }
+
+    private async void OnCopyAllRowsMenuClick(object sender, RoutedEventArgs e)
+    {
+        CopyOptionsPopup.IsOpen = false;
+        await CopySelectionAsync(ClipboardOptions.Default with { Scope = ClipboardScope.AllRowsInView });
+    }
+
+    private async Task CopySelectionAsync(ClipboardOptions options)
     {
         if (_viewModel.Grid is not { } grid) return;
 
-        ClipboardPayload payload = await grid.BuildClipboardTextAsync();
+        ClipboardPayload payload = await grid.BuildClipboardTextAsync(options);
         if (payload.RowCount == 0)
         {
-            _viewModel.ReportStatus("Nothing to copy — tick some rows, or click one.");
+            ShowToast(options.Scope == ClipboardScope.AllRowsInView
+                ? "Nothing to copy — no rows in view."
+                : "Nothing to copy — tick some rows, or click one.");
             return;
         }
 
@@ -322,13 +364,14 @@ public partial class MainWindow : Window
             // The clipboard is a shared OS resource and another process can be holding it open;
             // failing to copy is not a reason to take the app down.
             FileLogger.Instance.LogWarning($"Could not write to the clipboard: {ex.Message}");
-            _viewModel.ReportStatus("Could not copy — another program is using the clipboard.");
+            ShowToast("Could not copy — another program is using the clipboard.");
             return;
         }
 
-        _viewModel.ReportStatus(payload.Truncated
-            ? $"Copied the first {payload.RowCount:N0} row(s) — the selection was larger than the clipboard limit."
-            : $"Copied {payload.RowCount:N0} row(s).");
+        string what = options.Format == ClipboardFormat.Csv ? "as CSV" : "to clipboard";
+        ShowToast(payload.Truncated
+            ? $"Copied the first {payload.RowCount:N0} of your rows {what} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
+            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}.");
     }
 
     private void OnCancelFilterClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.CancelFilter();
@@ -393,6 +436,42 @@ public partial class MainWindow : Window
         foreach ((string key, string value) in header.TrailerMetadata) lines.Add(new ColumnStatLine(key, value));
 
         return lines;
+    }
+
+    /// <summary>
+    /// A short-lived confirmation over the grid. Copying otherwise says nothing at all about whether
+    /// it worked or how much it took, and the status bar — a grey line at the bottom of the window —
+    /// is not where anyone looks straight after pressing Ctrl+C. The message still goes to the status
+    /// bar as well, so it is readable after the toast has gone.
+    /// </summary>
+    private void ShowToast(string message)
+    {
+        _viewModel.ReportStatus(message);
+
+        ToastText.Text = message;
+        // A held animation keeps ownership of Opacity, so a second toast arriving mid-fade would be
+        // stuck at whatever the last one faded to. Clearing it hands the property back.
+        Toast.BeginAnimation(UIElement.OpacityProperty, null);
+        Toast.Opacity = 1;
+        Toast.Visibility = Visibility.Visible;
+
+        _toastGeneration++;
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    private void OnToastTimerTick(object? sender, EventArgs e)
+    {
+        _toastTimer.Stop();
+
+        int generation = _toastGeneration;
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(260));
+        fade.Completed += (_, _) =>
+        {
+            if (generation != _toastGeneration) return; // a newer toast took over while this faded
+            Toast.Visibility = Visibility.Collapsed;
+        };
+        Toast.BeginAnimation(UIElement.OpacityProperty, fade);
     }
 
     /// <summary>Fades and drops the popup's content in on every open — Popup reuses its visual tree across opens, so a Loaded-based trigger would only ever fire once; Opened fires every time.</summary>
@@ -672,6 +751,12 @@ public partial class MainWindow : Window
                     break;
                 case nameof(GridViewModel.ColumnSearchText):
                     columnsView.Refresh();
+                    break;
+                // Picking "Fit to window" deliberately doesn't set a row count — the window measures
+                // one. Nothing was asking for that measurement, though, so the choice sat there doing
+                // nothing until the next resize and the grid kept whatever page size it had before.
+                case nameof(GridViewModel.SelectedPageSize):
+                    Dispatcher.BeginInvoke(ApplyDynamicPageSize, DispatcherPriority.Loaded);
                     break;
             }
         }

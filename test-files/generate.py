@@ -297,6 +297,53 @@ def multi_section_plain_name() -> None:
     _bulk_file("33-multi-section-plain-name.dif", sections, 4)
 
 
+def _envelope(name: str, fields: list[str], ids: list[str], values: list[list[str]]) -> list[str]:
+    """One whole file envelope: its own preamble, DATA= name, fields, data and closing stats."""
+    return [
+        "START-OF-FILE",
+        "FIRMNAME=dl123456",
+        "PROGRAMNAME=getdata",
+        "DATEFORMAT=yyyymmdd",
+        "DELIMITER=|",
+        f"DATA={name}",
+        "RUNDATE=20260920",
+        "START-OF-FIELDS", *fields, "END-OF-FIELDS",
+        "TIMESTARTED=Sun Sep 20 09:00:00 EDT 2026",
+        "START-OF-DATA",
+        *rows_with_implicit_prefix(ids, len(fields), values, "|"),
+        "END-OF-DATA",
+        f"DATARECORDS={len(ids)}",
+        "TIMEFINISHED=Sun Sep 20 09:00:04 EDT 2026",
+        "END-OF-FILE",
+    ]
+
+
+def concatenated_envelopes() -> None:
+    """The shape a real bulk delivery actually has.
+
+    Not one envelope holding several field blocks (that is 30-33) but whole file envelopes laid end
+    to end — each with its own START-OF-FILE, preamble, DATA= name, field list, data, per-envelope
+    record count and END-OF-FILE. `34` puts a file-level IMAHDR/IMATRL around them; `35` has no
+    header marker at all, which is legal and used to be rejected outright.
+    """
+    envelopes = [
+        _envelope("CALL_SCHEDULE", ["CALL_DATE", "CALL_PRICE"],
+                  ["EC3478608 Corp", "EC3478608 Corp"],
+                  [["20270601", "104.775000"], ["20280601", "102.388000"]]),
+        _envelope("DVD_HIST", ["DECLARED_DATE", "EX_DATE", "DIVIDEND_AMOUNT"],
+                  ["AAPL US Equity", "MSFT US Equity", "IBM US Equity"],
+                  [["20260130", "20260209", "0.250000"],
+                   ["20260121", "20260213", "0.830000"],
+                   ["20260110", "20260210", "1.670000"]]),
+        _envelope("INDX_MEMBERS", ["MEMBER_TICKER_AND_EXCHANGE_CODE", "PERCENT_WEIGHT"],
+                  ["SPX Index"], [["AAPL UW", "7.412000"]]),
+    ]
+    body = [line for envelope in envelopes for line in envelope]
+
+    write("34-bulk-concatenated-envelopes.dif", ["IMAHDR", *body, "IMATRL", "DATARECORDS=6"])
+    write("35-bulk-envelopes-no-header-marker.dif", body)
+
+
 # --------------------------------------------------------------------------------------------
 # 40-41 — column shapes worth pointing the stats, sort and search at
 # --------------------------------------------------------------------------------------------
@@ -485,6 +532,7 @@ def main() -> None:
     bulk_many()
     bulk_unnamed()
     multi_section_plain_name()
+    concatenated_envelopes()
     datatypes_mixed()
     unicode_and_blanks()
     perf_sample(args.perf_rows)
