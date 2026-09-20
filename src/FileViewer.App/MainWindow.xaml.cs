@@ -391,8 +391,8 @@ public partial class MainWindow : Window
         };
         if (options.ColumnScope == ClipboardColumnScope.AllColumns) what += ", all columns";
         ShowToast(payload.Truncated
-            ? $"Copied the first {payload.RowCount:N0} of your rows {what} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
-            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}.");
+            ? $"Copied the first {payload.RowCount:N0} of your rows {what}{columns} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
+            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}{columns}.");
     }
 
     private void OnCancelFilterClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.CancelFilter();

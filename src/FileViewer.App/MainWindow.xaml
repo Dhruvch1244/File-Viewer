@@ -266,7 +266,7 @@
                         <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="12,4" />
 
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="FROZEN COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="FROZEN COLUMNS" Style="{StaticResource SectionLabelStyle}" VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBox Width="34" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" HorizontalContentAlignment="Center" />
                         </StackPanel>
                     </StackPanel>
@@ -299,7 +299,7 @@
                     <!-- Names the shape of the file, not just "sections": a bulk delivery is several
                          whole exports in one file, each with its own columns, and that is worth saying
                          before someone wonders why the columns changed when they clicked a chip. -->
-                    <TextBlock DockPanel.Dock="Left" Text="{Binding ActiveTab.SectionBarLabel}" FontSize="10" FontWeight="SemiBold"
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding ActiveTab.SectionBarLabel}" Style="{StaticResource SectionLabelStyle}"
                                Foreground="{DynamicResource AccentDarkBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
                     <Button DockPanel.Dock="Right" Content="Open all in tabs" Style="{StaticResource ToolbarButtonStyle}"
                             Padding="10,4" FontSize="12" Margin="10,0,0,0" Click="OnOpenAllSectionsInTabsClick"
@@ -337,8 +337,8 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
                     Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}">
                 <WrapPanel Orientation="Horizontal" Margin="16,8,16,4">
-                    <TextBlock Text="SEARCH" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,4" />
+                    <TextBlock Text="SEARCH" Style="{StaticResource SectionLabelStyle}"
+                               VerticalAlignment="Center" Margin="0,0,10,4" />
 
                     <ComboBox MinWidth="130" MaxWidth="190" VerticalAlignment="Center" Margin="0,0,6,4"
                               ItemsSource="{Binding Grid.SearchColumns}" SelectedItem="{Binding Grid.SearchColumn}"
@@ -419,8 +419,8 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
                     Visibility="{Binding Grid.HasActiveFilters, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
                 <DockPanel Margin="16,8">
-                    <TextBlock DockPanel.Dock="Left" Text="FILTERED BY" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <TextBlock DockPanel.Dock="Left" Text="FILTERED BY" Style="{StaticResource SectionLabelStyle}"
+                               VerticalAlignment="Center" Margin="0,0,10,0" />
                     <Button DockPanel.Dock="Right" Content="Clear all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12"
                             Command="{Binding Grid.ClearAllFiltersCommand}" VerticalAlignment="Center" />
                     <ItemsControl ItemsSource="{Binding Grid.ActiveFilterChips}">
@@ -480,8 +480,8 @@
                     </StackPanel>
 
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="ROWS PER PAGE" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0" />
+                        <TextBlock Text="ROWS PER PAGE" Style="{StaticResource SectionLabelStyle}" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" />
                         <ComboBox MinWidth="128" VerticalAlignment="Center"
                                   ItemsSource="{Binding Grid.PageSizeOptions}" SelectedItem="{Binding Grid.SelectedPageSize}"
                                   ToolTip="How many rows to show at once. 'All rows' scrolls through the whole result set."
@@ -686,7 +686,7 @@
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="COLUMNS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" />
+                    <TextBlock DockPanel.Dock="Top" Text="COLUMNS" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,8" />
                     <TextBox DockPanel.Dock="Top" Margin="0,0,0,8"
                              Text="{Binding Grid.ColumnSearchText, UpdateSourceTrigger=PropertyChanged}" />
                     <!-- Act on whatever the search box above currently shows — with no search text that's every column. -->
@@ -716,7 +716,7 @@
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="FILE INFO" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,10" />
+                    <TextBlock DockPanel.Dock="Top" Text="FILE INFO" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,10" />
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <ItemsControl x:Name="FileInfoList">
@@ -735,8 +735,8 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <TextBlock x:Name="FileDiagnosticsHeading" Text="DIAGNOSTICS" FontSize="10" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,14,4,6" Visibility="Collapsed" />
+                            <TextBlock x:Name="FileDiagnosticsHeading" Text="DIAGNOSTICS" Style="{StaticResource SectionLabelStyle}"
+                                       Margin="4,14,4,6" Visibility="Collapsed" />
                             <ItemsControl x:Name="FileDiagnosticsList">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -762,7 +762,7 @@
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="RECENT FILES" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,4,8,8" />
+                    <TextBlock DockPanel.Dock="Top" Text="RECENT FILES" Style="{StaticResource SectionLabelStyle}" Margin="8,4,8,8" />
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding RecentFiles}">
                             <ItemsControl.ItemTemplate>
@@ -857,8 +857,8 @@
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
-                    <TextBlock x:Name="ColumnFilterTitle" DockPanel.Dock="Top" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="ColumnFilterTitle" DockPanel.Dock="Top" Style="{StaticResource SectionLabelStyle}"
+                               Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
 
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
                         <Button x:Name="ColumnValuesModeButton" Content="Values" Style="{StaticResource ToolbarButtonStyle}"
@@ -912,38 +912,15 @@
                     </StackPanel>
 
                     <Grid>
+                        <!-- Everything here except Cancel/Apply lives inside ONE ScrollViewer, deliberately —
+                             see the note on ColumnFilterPopup above. A DockPanel's last (fill) child only gets
+                             whatever space the docked items ahead of it left over, and can be squeezed to
+                             nothing; putting the header, search box, select/deselect row and the value list
+                             all inside the same scrollable region means there is no fixed budget to exhaust —
+                             the group scrolls as a unit, so every value is reachable by scrolling however far
+                             it takes, never by a sliver of a scrollbar that only shows one row. -->
                         <DockPanel x:Name="ColumnValuesPanel">
-                            <TextBlock DockPanel.Dock="Top" Text="OR PICK FROM VALUES" FontSize="10" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
-                            <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
-                                <TextBox x:Name="ColumnFilterSearchBox" TextChanged="OnColumnFilterSearchChanged"
-                                         AutomationProperties.Name="Search values"
-                                         ToolTip="Narrows the list below. Select all / Deselect all then apply to just what the search leaves showing." />
-                                <TextBlock Text="Search values…" Foreground="{DynamicResource TextSecondaryBrush}"
-                                           Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnFilterSearchBox}" Value="0">
-                                                    <Setter Property="Visibility" Value="Visible" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </Grid>
-                            <!-- "Deselect all" rather than "Clear": it already unticked everything, but
-                                 next to a "Clear sort" button "Clear" reads as "clear the filter", which
-                                 is the opposite of what ticking nothing then applying does. Both buttons
-                                 act on whatever the search above leaves showing, which is why they say so. -->
-                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick"
-                                        ToolTip="Tick every value currently listed" />
-                                <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick"
-                                        ToolTip="Untick every value currently listed" />
-                            </StackPanel>
-                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                                 <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
                                 <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
                             </StackPanel>

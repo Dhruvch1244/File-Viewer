@@ -639,36 +639,81 @@ public sealed class GridViewModel : ObservableObject
 
         return await Task.Run(() =>
         {
-            var builder = new StringBuilder();
+            string text = format == ClipboardFormat.Json
+                ? BuildJson(session, columnNames, columnIndexes, rows)
+                : BuildDelimited(session, columnNames, columnIndexes, rows, format, options.IncludeHeaders);
+            return new ClipboardPayload(text, rows.Count, truncated);
+        });
+    }
 
-            if (options.IncludeHeaders)
+    private static string BuildDelimited(
+        FileViewerSession session, IReadOnlyList<string> columnNames, int[] columnIndexes,
+        List<long> rows, ClipboardFormat format, bool includeHeaders)
+    {
+        bool csv = format == ClipboardFormat.Csv;
+        char separator = csv ? ',' : '\t';
+        var builder = new StringBuilder();
+
+        if (includeHeaders)
+        {
+            for (int i = 0; i < columnIndexes.Length; i++)
             {
-                for (int i = 0; i < columnIndexes.Length; i++)
-                {
-                    if (i > 0) builder.Append(separator);
-                    builder.Append(Encode(columnNames[columnIndexes[i]], csv));
-                }
-                builder.Append('\n');
+                if (i > 0) builder.Append(separator);
+                builder.Append(Encode(columnNames[columnIndexes[i]], csv));
             }
+            builder.Append('\n');
+        }
 
+        foreach (long rowIndex in rows)
+        {
+            Core.Overlay.ResolvedRow? resolved = session.Resolve(rowIndex);
+            if (resolved is null) continue; // deleted while we were building
+
+            for (int i = 0; i < columnIndexes.Length; i++)
+            {
+                if (i > 0) builder.Append(separator);
+                int columnIndex = columnIndexes[i];
+                builder.Append(Encode(
+                    columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty,
+                    csv));
+            }
+            builder.Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The same shape <see cref="FileViewer.Core.Export.JsonExporter"/> writes to a file — a JSON
+    /// array of objects, column name to value — via the same <see cref="Utf8JsonWriter"/> escaping
+    /// rather than hand-rolled string building, so a value with a quote or a control character in it
+    /// comes out valid JSON here exactly as it would from a real export.
+    /// </summary>
+    private static string BuildJson(
+        FileViewerSession session, IReadOnlyList<string> columnNames, int[] columnIndexes, List<long> rows)
+    {
+        using var stream = new System.IO.MemoryStream();
+        using (var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions { Indented = false }))
+        {
+            writer.WriteStartArray();
             foreach (long rowIndex in rows)
             {
                 Core.Overlay.ResolvedRow? resolved = session.Resolve(rowIndex);
                 if (resolved is null) continue; // deleted while we were building
 
+                writer.WriteStartObject();
                 for (int i = 0; i < columnIndexes.Length; i++)
                 {
-                    if (i > 0) builder.Append(separator);
                     int columnIndex = columnIndexes[i];
-                    builder.Append(Encode(
-                        columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty,
-                        csv));
+                    string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
+                    writer.WriteString(columnNames[columnIndex], value);
                 }
-                builder.Append('\n');
+                writer.WriteEndObject();
             }
+            writer.WriteEndArray();
+        }
 
-            return new ClipboardPayload(builder.ToString(), rows.Count, truncated);
-        });
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
 
     /// <summary>
@@ -888,7 +933,7 @@ public sealed class GridViewModel : ObservableObject
 }
 
 /// <summary>Text destined for the clipboard, with what had to be left out of it.</summary>
-/// <param name="Text">Tab-separated rows, header first.</param>
+/// <param name="Text">The rows, in whatever format was asked for.</param>
 /// <param name="RowCount">How many rows it covers.</param>
 /// <param name="Truncated">True if the selection was larger than <see cref="GridViewModel.MaxClipboardRows"/>.</param>
 public readonly record struct ClipboardPayload(string Text, int RowCount, bool Truncated);
@@ -901,6 +946,23 @@ public enum ClipboardScope
 
     /// <summary>Every row the current filters leave, ticked or not — across pages, not just this one.</summary>
     AllRowsInView,
+}
+
+/// <summary>
+/// Which columns a copy takes. A file can declare far more columns than the
+/// <see cref="GridViewModel.DefaultVisibleColumnCount"/> shown by default, so "what's on screen" and
+/// "the whole record" are genuinely different things — Export always writes the whole record
+/// (<see cref="FileViewer.Core.Export.IRowExporter"/> takes <c>ResolvedRow.FieldValues</c> in full,
+/// regardless of grid column visibility); Copy used to silently do the opposite, dropping every
+/// hidden column with no way to get them back short of unhiding each one first.
+/// </summary>
+public enum ClipboardColumnScope
+{
+    /// <summary>Only the columns currently shown in the grid, in their current order.</summary>
+    VisibleColumns,
+
+    /// <summary>Every column the row declares, in file order — the original record, unfiltered by what happens to be shown.</summary>
+    AllColumns,
 }
 
 /// <summary>Which text format a copy produces.</summary>
