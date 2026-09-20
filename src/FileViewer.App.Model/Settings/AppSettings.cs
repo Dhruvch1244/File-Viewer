@@ -1,7 +1,4 @@
-using System.IO;
-using System.Linq;
 using System.Text.Json;
-using FileViewer.App.Logging;
 
 namespace FileViewer.App.Settings;
 
@@ -36,6 +33,12 @@ public sealed class AppSettings
         "BloombergFileViewer",
         "settings.json");
 
+    /// <summary>
+    /// Where a failure to read or write settings is reported. Set by the app to its log; left null
+    /// in tests, where the point is that a failure changes nothing observable.
+    /// </summary>
+    public static Action<string>? OnWarning { get; set; }
+
     public static AppSettings Load()
     {
         try
@@ -47,7 +50,7 @@ public sealed class AppSettings
         }
         catch (Exception ex)
         {
-            FileLogger.Instance.LogWarning($"Could not read settings ({ex.Message}); starting with defaults.");
+            OnWarning?.Invoke($"Could not read settings ({ex.Message}); starting with defaults.");
             return new AppSettings();
         }
     }
@@ -62,7 +65,7 @@ public sealed class AppSettings
         }
         catch (Exception ex)
         {
-            FileLogger.Instance.LogWarning($"Could not save settings ({ex.Message}).");
+            OnWarning?.Invoke($"Could not save settings ({ex.Message}).");
         }
     }
 

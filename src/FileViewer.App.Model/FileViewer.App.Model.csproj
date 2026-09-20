@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    View-state types with no WPF dependency, in their own plain net8.0 assembly so they can be tested
+    on any runner. FileViewer.App targets net8.0-windows, which means nothing in it can be covered by
+    a test project — and selection, paging and settings are exactly the kind of logic that needs to be.
+  -->
+
+</Project>

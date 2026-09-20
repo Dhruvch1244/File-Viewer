@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Threading;
 using FileViewer.App.Logging;
+using FileViewer.App.Settings;
 
 namespace FileViewer.App;
 
@@ -12,6 +13,11 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // The settings type lives in a UI-free assembly so it can be tested; this is where it gets
+        // told how to report a failure.
+        AppSettings.OnWarning = message => FileLogger.Instance.LogWarning(message);
+
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;

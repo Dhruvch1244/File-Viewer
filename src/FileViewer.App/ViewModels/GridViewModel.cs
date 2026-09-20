@@ -67,6 +67,10 @@ public sealed class GridViewModel : ObservableObject
             OnPropertyChanged(nameof(CanGoToPreviousPage));
             OnPropertyChanged(nameof(CanGoToNextPage));
             OnPropertyChanged(nameof(RowRangeLabel));
+
+            // "All matching" has to keep meaning what matches *now*, not what matched when the user
+            // pressed it.
+            Selection.UpdateMatchingRowCount(Rows.TotalRowCount);
             OnPropertyChanged(nameof(PageNumberText));
             OnPropertyChanged(nameof(IsPagingActive));
             OnPropertyChanged(nameof(MatchCount));
@@ -610,8 +614,12 @@ public sealed class GridViewModel : ObservableObject
         Rows.Invalidate();
     }
 
-    /// <summary>Selects every row matching the current search/column filters, across every page — not just the page currently rendered by the grid.</summary>
-    public void SelectAllRows() => Selection.SelectAll(Rows.GetAllRowIndices());
+    /// <summary>
+    /// Selects every row matching the current filters — across every page, not just what is
+    /// rendered. Recorded as a mode rather than a list, so this costs nothing even when "every row"
+    /// means millions (see <see cref="RowSelectionState"/>).
+    /// </summary>
+    public void SelectAllRows() => Selection.SelectAllMatching(Rows.TotalRowCount);
 
     public void ClearAllRowSelection() => Selection.Clear();
 
@@ -626,7 +634,9 @@ public sealed class GridViewModel : ObservableObject
 
     private void DeleteSelectedRows()
     {
-        Session.Overlay.BulkDelete([.. Selection.SelectedRowIndices]);
+        // Materialized here, against the rows currently in view — in select-all mode the selection
+        // is a rule rather than a list until something acts on it.
+        Session.Overlay.BulkDelete([.. Selection.Resolve(Rows.GetAllRowIndices())]);
         Selection.Clear();
         Rows.Invalidate();
     }
