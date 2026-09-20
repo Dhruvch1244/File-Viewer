@@ -601,7 +601,13 @@ public sealed class GridViewModel : ObservableObject
     /// <param name="options">Which rows to take, in which format, with or without a header line.</param>
     public async Task<ClipboardPayload> BuildClipboardTextAsync(ClipboardOptions options)
     {
-        int[] columnIndexes = [.. Columns.Where(column => column.IsVisible).Select(column => column.Index)];
+        // AllColumns means the original record, in file order, unfiltered by which of them happen to
+        // be shown right now — the same thing Export always writes. VisibleColumns keeps matching
+        // "what's on screen", in the order the user has it, since that's what most copies are for
+        // (pasting into a sheet that mirrors the grid).
+        int[] columnIndexes = options.ColumnScope == ClipboardColumnScope.AllColumns
+            ? [.. Enumerable.Range(0, ColumnNames.Count)]
+            : [.. Columns.Where(column => column.IsVisible).Select(column => column.Index)];
         if (columnIndexes.Length == 0) return new ClipboardPayload(string.Empty, 0, false);
 
         IReadOnlyList<long> rowsInView = Rows.GetAllRowIndices();
@@ -618,41 +624,85 @@ public sealed class GridViewModel : ObservableObject
 
         FileViewerSession session = Session;
         IReadOnlyList<string> columnNames = ColumnNames;
-        bool csv = options.Format == ClipboardFormat.Csv;
-        char separator = csv ? ',' : '\t';
+        ClipboardFormat format = options.Format;
 
         return await Task.Run(() =>
         {
-            var builder = new StringBuilder();
+            string text = format == ClipboardFormat.Json
+                ? BuildJson(session, columnNames, columnIndexes, rows)
+                : BuildDelimited(session, columnNames, columnIndexes, rows, format, options.IncludeHeaders);
+            return new ClipboardPayload(text, rows.Count, truncated);
+        });
+    }
 
-            if (options.IncludeHeaders)
+    private static string BuildDelimited(
+        FileViewerSession session, IReadOnlyList<string> columnNames, int[] columnIndexes,
+        List<long> rows, ClipboardFormat format, bool includeHeaders)
+    {
+        bool csv = format == ClipboardFormat.Csv;
+        char separator = csv ? ',' : '\t';
+        var builder = new StringBuilder();
+
+        if (includeHeaders)
+        {
+            for (int i = 0; i < columnIndexes.Length; i++)
             {
-                for (int i = 0; i < columnIndexes.Length; i++)
-                {
-                    if (i > 0) builder.Append(separator);
-                    builder.Append(Encode(columnNames[columnIndexes[i]], csv));
-                }
-                builder.Append('\n');
+                if (i > 0) builder.Append(separator);
+                builder.Append(Encode(columnNames[columnIndexes[i]], csv));
             }
+            builder.Append('\n');
+        }
 
+        foreach (long rowIndex in rows)
+        {
+            Core.Overlay.ResolvedRow? resolved = session.Resolve(rowIndex);
+            if (resolved is null) continue; // deleted while we were building
+
+            for (int i = 0; i < columnIndexes.Length; i++)
+            {
+                if (i > 0) builder.Append(separator);
+                int columnIndex = columnIndexes[i];
+                builder.Append(Encode(
+                    columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty,
+                    csv));
+            }
+            builder.Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The same shape <see cref="FileViewer.Core.Export.JsonExporter"/> writes to a file — a JSON
+    /// array of objects, column name to value — via the same <see cref="Utf8JsonWriter"/> escaping
+    /// rather than hand-rolled string building, so a value with a quote or a control character in it
+    /// comes out valid JSON here exactly as it would from a real export.
+    /// </summary>
+    private static string BuildJson(
+        FileViewerSession session, IReadOnlyList<string> columnNames, int[] columnIndexes, List<long> rows)
+    {
+        using var stream = new System.IO.MemoryStream();
+        using (var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions { Indented = false }))
+        {
+            writer.WriteStartArray();
             foreach (long rowIndex in rows)
             {
                 Core.Overlay.ResolvedRow? resolved = session.Resolve(rowIndex);
                 if (resolved is null) continue; // deleted while we were building
 
+                writer.WriteStartObject();
                 for (int i = 0; i < columnIndexes.Length; i++)
                 {
-                    if (i > 0) builder.Append(separator);
                     int columnIndex = columnIndexes[i];
-                    builder.Append(Encode(
-                        columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty,
-                        csv));
+                    string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
+                    writer.WriteString(columnNames[columnIndex], value);
                 }
-                builder.Append('\n');
+                writer.WriteEndObject();
             }
+            writer.WriteEndArray();
+        }
 
-            return new ClipboardPayload(builder.ToString(), rows.Count, truncated);
-        });
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
 
     /// <summary>
@@ -839,7 +889,7 @@ public sealed class GridViewModel : ObservableObject
 }
 
 /// <summary>Text destined for the clipboard, with what had to be left out of it.</summary>
-/// <param name="Text">Tab-separated rows, header first.</param>
+/// <param name="Text">The rows, in whatever format was asked for.</param>
 /// <param name="RowCount">How many rows it covers.</param>
 /// <param name="Truncated">True if the selection was larger than <see cref="GridViewModel.MaxClipboardRows"/>.</param>
 public readonly record struct ClipboardPayload(string Text, int RowCount, bool Truncated);
@@ -854,6 +904,23 @@ public enum ClipboardScope
     AllRowsInView,
 }
 
+/// <summary>
+/// Which columns a copy takes. A file can declare far more columns than the
+/// <see cref="GridViewModel.DefaultVisibleColumnCount"/> shown by default, so "what's on screen" and
+/// "the whole record" are genuinely different things — Export always writes the whole record
+/// (<see cref="FileViewer.Core.Export.IRowExporter"/> takes <c>ResolvedRow.FieldValues</c> in full,
+/// regardless of grid column visibility); Copy used to silently do the opposite, dropping every
+/// hidden column with no way to get them back short of unhiding each one first.
+/// </summary>
+public enum ClipboardColumnScope
+{
+    /// <summary>Only the columns currently shown in the grid, in their current order.</summary>
+    VisibleColumns,
+
+    /// <summary>Every column the row declares, in file order — the original record, unfiltered by what happens to be shown.</summary>
+    AllColumns,
+}
+
 /// <summary>Which text format a copy produces.</summary>
 public enum ClipboardFormat
 {
@@ -862,15 +929,26 @@ public enum ClipboardFormat
 
     /// <summary>Comma-separated with the usual quoting, for pasting into a text file or a tool that wants CSV.</summary>
     Csv,
+
+    /// <summary>
+    /// A JSON array of objects, column name to value — the same shape <see cref="FileViewer.Core.Export.JsonExporter"/>
+    /// writes files in, so a copy and an export agree. Always carries field names (that's what makes it JSON
+    /// rather than a bare array), so <see cref="ClipboardOptions.IncludeHeaders"/> has nothing to do here.
+    /// </summary>
+    Json,
 }
 
 /// <summary>
-/// One entry of the Copy dropdown. The plain Copy button is <see cref="Default"/>; the rest exist
-/// because "copy" means something different depending on where it is going — a spreadsheet wants
-/// headers and tabs, a diff or a config file usually wants neither.
+/// What a copy takes and how it's written. <see cref="Default"/> is the plain Copy button: ticked
+/// rows, the columns currently shown, tab-separated, with a header line — unchanged from before this
+/// existed. Everything else is reached through the Copy panel's three independent choices (rows /
+/// columns / format) rather than a list of preset combinations: with two row scopes, two column
+/// scopes and three formats there are twelve meaningful copies, too many to name individually without
+/// the list itself becoming the confusing part.
 /// </summary>
 public readonly record struct ClipboardOptions(
     ClipboardScope Scope = ClipboardScope.SelectedRows,
+    ClipboardColumnScope ColumnScope = ClipboardColumnScope.VisibleColumns,
     ClipboardFormat Format = ClipboardFormat.TabSeparated,
     bool IncludeHeaders = true)
 {

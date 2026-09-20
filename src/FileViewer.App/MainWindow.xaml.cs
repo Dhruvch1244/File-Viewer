@@ -318,28 +318,44 @@ public partial class MainWindow : Window
 
     private void OnCopyOptionsClick(object sender, RoutedEventArgs e) => CopyOptionsPopup.IsOpen = !CopyOptionsPopup.IsOpen;
 
-    private async void OnCopyDefaultMenuClick(object sender, RoutedEventArgs e)
+    private void OnCopyOptionsCancelClick(object sender, RoutedEventArgs e) => CopyOptionsPopup.IsOpen = false;
+
+    /// <summary>
+    /// JSON structurally always carries field names — that's what makes it JSON rather than a bare
+    /// array of arrays — so the "include column names" checkbox has nothing to do when JSON is
+    /// selected. Rather than silently ignoring it (which is exactly the kind of surprise this panel
+    /// replaced the old preset list to get away from), it's forced on and disabled while JSON is
+    /// picked, and given back to the user the moment they pick a format where it means something.
+    /// </summary>
+    private void OnCopyFormatChanged(object sender, RoutedEventArgs e)
     {
-        CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default);
+        // CopyFormatTsvOption is IsChecked="True" in markup, which can raise this Checked handler
+        // during InitializeComponent() itself — before CopyIncludeHeadersOption, declared later in
+        // the same popup, has been connected to its field yet. The null check is the only reliably
+        // portable way to guard that: WPF doesn't document the exact element-construction order
+        // markup-set property values fire their change events in. Nothing is lost by skipping the
+        // sync in that case — CopyIncludeHeadersOption's own XAML defaults (enabled, checked) already
+        // match what TSV, the initial selection, needs.
+        if (CopyIncludeHeadersOption is null) return;
+
+        bool json = ReferenceEquals(sender, CopyFormatJsonOption);
+        CopyIncludeHeadersOption.IsEnabled = !json;
+        if (json) CopyIncludeHeadersOption.IsChecked = true;
     }
 
-    private async void OnCopyWithoutHeadersMenuClick(object sender, RoutedEventArgs e)
+    private async void OnCopyOptionsApplyClick(object sender, RoutedEventArgs e)
     {
         CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default with { IncludeHeaders = false });
-    }
 
-    private async void OnCopyAsCsvMenuClick(object sender, RoutedEventArgs e)
-    {
-        CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default with { Format = ClipboardFormat.Csv });
-    }
+        var options = new ClipboardOptions(
+            Scope: CopyRowsAllInViewOption.IsChecked == true ? ClipboardScope.AllRowsInView : ClipboardScope.SelectedRows,
+            ColumnScope: CopyColumnsAllOption.IsChecked == true ? ClipboardColumnScope.AllColumns : ClipboardColumnScope.VisibleColumns,
+            Format: CopyFormatJsonOption.IsChecked == true ? ClipboardFormat.Json
+                : CopyFormatCsvOption.IsChecked == true ? ClipboardFormat.Csv
+                : ClipboardFormat.TabSeparated,
+            IncludeHeaders: CopyIncludeHeadersOption.IsChecked == true);
 
-    private async void OnCopyAllRowsMenuClick(object sender, RoutedEventArgs e)
-    {
-        CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default with { Scope = ClipboardScope.AllRowsInView });
+        await CopySelectionAsync(options);
     }
 
     private async Task CopySelectionAsync(ClipboardOptions options)
@@ -368,10 +384,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        string what = options.Format == ClipboardFormat.Csv ? "as CSV" : "to clipboard";
+        string what = options.Format switch
+        {
+            ClipboardFormat.Csv => "as CSV",
+            ClipboardFormat.Json => "as JSON",
+            _ => "to clipboard",
+        };
+        string columns = options.ColumnScope == ClipboardColumnScope.AllColumns ? ", all columns" : "";
         ShowToast(payload.Truncated
-            ? $"Copied the first {payload.RowCount:N0} of your rows {what} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
-            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}.");
+            ? $"Copied the first {payload.RowCount:N0} of your rows {what}{columns} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
+            : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}{columns}.");
     }
 
     private void OnCancelFilterClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.CancelFilter();

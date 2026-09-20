@@ -67,9 +67,13 @@ virtualized scrolling instead of loading the whole file into memory.
   came from does.
 - **A second window** when tabs aren't enough — independent files and tabs, for comparing two files
   side by side.
-- **Copy to the clipboard.** Ctrl+C copies the selected rows (or the one you're on) as tab-separated
-  text with a header line, covering the visible columns in their current order — it pastes straight
-  into Excel.
+- **Copy to the clipboard, and beyond just what's visible.** Ctrl+C copies the selected rows (or the
+  one you're on) as tab-separated text with a header line, covering the visible columns in their
+  current order — it pastes straight into Excel. The Copy button's caret opens a small panel for
+  everything that one shortcut doesn't cover: every row the filters leave in view rather than just
+  the ticked ones, every column the row declares rather than only the ones currently shown (the same
+  full record Export writes — useful on a wide file where most columns are hidden by default), and
+  CSV or JSON in place of tab-separated.
 - **Multi-format export, scoped to what you mean.** DIF, CSV, TSV or JSON, with a live preview of the
   first rows. By default it writes exactly the rows the grid is showing — edits, sort and filters
   applied — or just the rows you have ticked, or (for a bulk file) every section at once as one file

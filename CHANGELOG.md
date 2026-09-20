@@ -5,6 +5,42 @@ workflow publishes a `win-x64` build when a `v*.*.*` tag is pushed.
 
 This file starts at 0.1.5; releases 0.0.1 through 0.1.4 predate it and have no entries here.
 
+## 0.1.7
+
+### Fixed
+
+- **The column filter's value list could be squeezed down to one visible row, unscrollable in any
+  useful way.** It sat as the popup's last, leftover-space element behind a title, mode buttons, a
+  sort/match-by-text block and — for any column with more distinct values than the lookup collects,
+  which is routine for a price or timestamp column — a 3-4 line truncation notice. Whatever survived
+  that queue is what the list got, and for a real column it was often nothing. The whole "pick from
+  values" group (search box, select/deselect, the list) now scrolls as one unit instead of the list
+  alone competing for scraps, the popup itself is taller and a little wider, and the truncation
+  notice is one line with the rest in its tooltip instead of a paragraph.
+- **The app icon was soft and asymmetric at the sizes Windows actually shows it** (title bar,
+  taskbar, Alt-Tab) — a single large image resized down rather than rendered per size, and its two
+  bars were different widths to begin with. Redrawn at each of the eight sizes Windows uses
+  (16–256px) rather than scaled from one, in the app's own accent green instead of black.
+
+### Changed
+
+- **Copy can take the whole record, not just what's on screen.** A file can declare far more columns
+  than the default 20 shown at once, and Copy used to silently drop every hidden one with no way to
+  get them back short of unhiding each first — while Export, all along, already wrote every column
+  regardless of visibility. The Copy panel now offers both: visible columns (unchanged default) or
+  every column the row declares, the same full record Export writes.
+- **Copy gained JSON**, alongside tab-separated and CSV — a JSON array of objects, column name to
+  value, written with the same escaping `JsonExporter` writes files with, so a copy and an export of
+  the same rows agree byte for byte on the values.
+- **The Copy dropdown is a form now, not a list of preset sentences.** Four named presets ("Selected
+  rows as CSV", "Selected rows, no headers", ...) only ever covered part of what became six
+  independent choices once columns and JSON joined rows and format — the rest would have meant an
+  ever-longer list of increasingly specific descriptions. Three small toggles (rows / columns /
+  format) plus a headers checkbox replace it; the plain Copy button is unchanged.
+- Every small all-caps section label ("FILTERED BY", "MATCH BY TEXT", "RECENT FILES", ...)
+  previously hand-set its own font size and colour at each call site; consolidated into one style,
+  nudged very slightly larger for legibility.
+
 ## 0.1.6
 
 ### Fixed

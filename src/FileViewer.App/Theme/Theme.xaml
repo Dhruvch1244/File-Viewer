@@ -7,8 +7,29 @@
          re-theme the app live. See ThemeManager. -->
 
     <!-- ============================== Typography ============================= -->
+    <!-- Segoe UI Variable is Windows 11's system font, tuned for on-screen legibility at UI sizes
+         better than classic Segoe UI (larger x-height, more even stroke weight at small sizes);
+         "Text" is its optical size for body/UI text specifically (as opposed to the "Display" cut,
+         meant for large headings). Segoe UI is the fallback for Windows 10, where Variable isn't
+         installed — WPF's FontFamily list picks the first one actually present, so this costs
+         nothing on either OS. -->
     <FontFamily x:Key="UiFontFamily">Segoe UI Variable Text, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFontFamily">Cascadia Mono, Consolas, Segoe UI</FontFamily>
+
+    <!-- Every small all-caps section label in the app ("FILTERED BY", "MATCH BY TEXT", "RECENT
+         FILES", ...) used to hand-set the same three properties at each call site — consolidated
+         here so there's one place to tune them. Letter-spacing (the usual fix for small all-caps
+         text reading cramped) isn't set: TextBlock.CharacterSpacing doesn't exist as a settable
+         style property on this control in WPF, only on TextElement-derived types like Run inside a
+         FlowDocument, so it isn't available here without wrapping every label's text in a Run — not
+         worth the added markup for a small type of label. 10.5px is a half-step up from the 10px
+         these were before, calibrated so they still read as clearly secondary to body text (12-13px
+         elsewhere) rather than competing with it. -->
+    <Style x:Key="SectionLabelStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
 
     <!-- ============================== Buttons ================================ -->
     <Style x:Key="{x:Type Button}" TargetType="Button">
@@ -78,6 +99,60 @@
     <Style x:Key="ToolbarButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="Padding" Value="10,6" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- One pill of a segmented control: RadioButtons sharing a GroupName give the "exactly one of
+         these" behaviour for free, styled here to look like a small button row rather than a bullet
+         with a label — an unchecked pill is a plain outline, a checked one fills with the accent, no
+         separate "selected" state to wire up by hand. Used by the Copy panel's Rows/Columns/Format
+         choices, where a flat list of named presets ("Selected rows as CSV", "Selected rows, no
+         headers", ...) stopped scaling the moment a second independent choice (which columns) joined
+         the first (which rows) — two three-and-two-way choices are 12 combinations, too many to name
+         individually without the names becoming the confusing part. -->
+    <Style x:Key="SegmentedOptionButtonStyle" TargetType="RadioButton">
+        <Setter Property="Padding" Value="10,5" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Chrome"
+                            Background="Transparent"
+                            BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentDarkBrush}" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentDarkBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverBackgroundBrush}" />
+                        </Trigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsMouseOver" Value="True" />
+                                <Condition Property="IsChecked" Value="True" />
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentDarkHoverBrush}" />
+                        </MultiTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The row a SegmentedOptionButtonStyle group sits in — just orientation; each pill sets its own
+         small trailing margin (see the Copy panel) so they read as a spaced set rather than one fused
+         bar, which keeps each pill's hit target unambiguous at this size. -->
+    <Style x:Key="SegmentedOptionRowStyle" TargetType="StackPanel">
+        <Setter Property="Orientation" Value="Horizontal" />
     </Style>
 
     <!-- ============================== TextBox ================================ -->
