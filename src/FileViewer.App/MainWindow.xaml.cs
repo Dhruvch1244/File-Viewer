@@ -318,28 +318,43 @@ public partial class MainWindow : Window
 
     private void OnCopyOptionsClick(object sender, RoutedEventArgs e) => CopyOptionsPopup.IsOpen = !CopyOptionsPopup.IsOpen;
 
-    private async void OnCopyDefaultMenuClick(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Resets every control back to what the plain Copy button does, each time the popup opens —
+    /// deliberately not remembered from the last time it was opened, so picking "All columns" once
+    /// doesn't silently change what a later plain click of Copy itself does, or what a later open
+    /// of this same popup starts on.
+    /// </summary>
+    private void OnCopyOptionsPopupOpened(object sender, EventArgs e)
     {
-        CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default);
+        OnPopupOpened(sender, e); // still gets the shared fade-in animation
+
+        CopyRowsSelectedRadio.IsChecked = true;
+        CopyColumnsVisibleRadio.IsChecked = true;
+        CopyFormatTsvRadio.IsChecked = true;
+        CopyIncludeHeadersCheckBox.IsChecked = true;
+        CopyIncludeHeadersCheckBox.IsEnabled = true;
     }
 
-    private async void OnCopyWithoutHeadersMenuClick(object sender, RoutedEventArgs e)
+    /// <summary>JSON rows carry their own field names as object keys, so the headers checkbox has nothing to do there.</summary>
+    private void OnCopyFormatChanged(object sender, RoutedEventArgs e)
     {
-        CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default with { IncludeHeaders = false });
+        bool isJson = ReferenceEquals(sender, CopyFormatJsonRadio);
+        CopyIncludeHeadersCheckBox.IsEnabled = !isJson;
     }
 
-    private async void OnCopyAsCsvMenuClick(object sender, RoutedEventArgs e)
+    private async void OnCopyApplyClick(object sender, RoutedEventArgs e)
     {
         CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default with { Format = ClipboardFormat.Csv });
-    }
 
-    private async void OnCopyAllRowsMenuClick(object sender, RoutedEventArgs e)
-    {
-        CopyOptionsPopup.IsOpen = false;
-        await CopySelectionAsync(ClipboardOptions.Default with { Scope = ClipboardScope.AllRowsInView });
+        var options = new ClipboardOptions(
+            Scope: CopyRowsAllInViewRadio.IsChecked == true ? ClipboardScope.AllRowsInView : ClipboardScope.SelectedRows,
+            ColumnScope: CopyColumnsAllRadio.IsChecked == true ? ClipboardColumnScope.AllColumns : ClipboardColumnScope.VisibleColumns,
+            Format: CopyFormatJsonRadio.IsChecked == true ? ClipboardFormat.Json
+                  : CopyFormatCsvRadio.IsChecked == true ? ClipboardFormat.Csv
+                  : ClipboardFormat.TabSeparated,
+            IncludeHeaders: CopyIncludeHeadersCheckBox.IsChecked == true);
+
+        await CopySelectionAsync(options);
     }
 
     private async Task CopySelectionAsync(ClipboardOptions options)
@@ -368,7 +383,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        string what = options.Format == ClipboardFormat.Csv ? "as CSV" : "to clipboard";
+        string what = options.Format switch
+        {
+            ClipboardFormat.Csv => "as CSV",
+            ClipboardFormat.Json => "as JSON",
+            _ => "to clipboard",
+        };
+        if (options.ColumnScope == ClipboardColumnScope.AllColumns) what += ", all columns";
         ShowToast(payload.Truncated
             ? $"Copied the first {payload.RowCount:N0} of your rows {what} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
             : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}.");

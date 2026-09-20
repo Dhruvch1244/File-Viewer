@@ -790,54 +790,53 @@
         <!-- Each entry names what lands on the clipboard, with the reason underneath, because
              "Copy as CSV" and "Copy without headers" are indistinguishable from the default until
              you have already pasted somewhere and looked. -->
+        <!-- Three independent choices (rows / columns / format) rather than a flat list of presets.
+             A flat list tops out fast: it had no way to ask for "all columns as JSON", say, without
+             a button for every combination. Each choice remembers nothing between opens — the popup
+             always opens on the same defaults as the plain Copy button, so what "Copy" does never
+             quietly depends on what was last picked in here. -->
         <Popup x:Name="CopyOptionsPopup" PlacementTarget="{Binding ElementName=CopyOptionsButton}" Placement="Bottom"
-               StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+               StaysOpen="False" AllowsTransparency="True" Opened="OnCopyOptionsPopupOpened">
             <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
-                    CornerRadius="8" Padding="8" Width="300" Margin="0,4,0,0">
+                    CornerRadius="8" Padding="12" Width="300" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <StackPanel>
                     <TextBlock Text="COPY" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,4,8,8" />
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" />
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyDefaultMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Selected rows" FontSize="12.5" />
-                            <TextBlock Text="With headers, tab-separated — what the Copy button does"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="ROWS" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                    <RadioButton x:Name="CopyRowsSelectedRadio" GroupName="CopyRows" Content="Selected rows"
+                                 ToolTip="The ticked rows, or the row you last clicked if none are ticked" Margin="4,0,0,4" />
+                    <RadioButton x:Name="CopyRowsAllInViewRadio" GroupName="CopyRows" Content="Every row in view"
+                                 ToolTip="Everything the current filters leave, across every page — ticked or not" Margin="4,0,0,10" />
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyWithoutHeadersMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Selected rows, no headers" FontSize="12.5" />
-                            <TextBlock Text="Values only — for pasting under rows you already have"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="COLUMNS" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                    <RadioButton x:Name="CopyColumnsVisibleRadio" GroupName="CopyColumns" Content="Visible columns"
+                                 ToolTip="Exactly what the grid is showing right now, in that order" Margin="4,0,0,4" />
+                    <RadioButton x:Name="CopyColumnsAllRadio" GroupName="CopyColumns" Content="All columns (original record)"
+                                 ToolTip="Every field this row's record declares, in file order — matches Export, and never touches other sections of a bulk file" Margin="4,0,0,10" />
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyAsCsvMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Selected rows as CSV" FontSize="12.5" />
-                            <TextBlock Text="Commas and quoting, the same as an exported .csv"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="FORMAT" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                    <StackPanel Orientation="Horizontal" Margin="4,0,0,4">
+                        <RadioButton x:Name="CopyFormatTsvRadio" GroupName="CopyFormat" Content="Tab-separated" Margin="0,0,14,0"
+                                     ToolTip="Pastes straight into spreadsheet cells" Checked="OnCopyFormatChanged" />
+                        <RadioButton x:Name="CopyFormatCsvRadio" GroupName="CopyFormat" Content="CSV" Margin="0,0,14,0"
+                                     ToolTip="Quoted the same way an exported .csv is" Checked="OnCopyFormatChanged" />
+                        <RadioButton x:Name="CopyFormatJsonRadio" GroupName="CopyFormat" Content="JSON"
+                                     ToolTip="A JSON array of row objects, the same shape as an exported .json" Checked="OnCopyFormatChanged" />
+                    </StackPanel>
+                    <!-- Meaningless for JSON — every row object already carries its field names as keys,
+                         so there's no separate header line to include or omit. -->
+                    <CheckBox x:Name="CopyIncludeHeadersCheckBox" Content="Include column headers" IsChecked="True"
+                              Margin="4,0,0,10" />
 
-                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="8,6" />
-
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyAllRowsMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Every row in view" FontSize="12.5" />
-                            <TextBlock Text="Everything the filters leave, across all pages — ticked or not"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <Button Content="Copy" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Right"
+                            Padding="16,6" Click="OnCopyApplyClick" />
                 </StackPanel>
             </Border>
         </Popup>
