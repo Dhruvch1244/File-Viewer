@@ -673,6 +673,12 @@ public partial class MainWindow : Window
                 case nameof(GridViewModel.ColumnSearchText):
                     columnsView.Refresh();
                     break;
+                // Picking "Fit to window" deliberately doesn't set a row count — the window measures
+                // one. Nothing was asking for that measurement, though, so the choice sat there doing
+                // nothing until the next resize and the grid kept whatever page size it had before.
+                case nameof(GridViewModel.SelectedPageSize):
+                    Dispatcher.BeginInvoke(ApplyDynamicPageSize, DispatcherPriority.Loaded);
+                    break;
             }
         }
 

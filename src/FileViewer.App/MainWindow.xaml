@@ -477,6 +477,16 @@
 
             <!-- ============================== Grid / welcome screen ==================== -->
             <Grid>
+            <!-- ColumnWidth/MinColumnWidth are set, and column virtualization is off, on purpose.
+                 Only the three fixed columns (select/view/delete) carry an explicit Width; the data
+                 columns are built in code-behind with none, so they fell back to auto-sizing. Column
+                 virtualization realizes only the columns in view, so that auto-size measured against
+                 cells that did not exist yet and settled at zero width — which takes the header with
+                 it, so every data column disappeared and the grid looked empty. Rows are what there
+                 are millions of and EnableRowVirtualization still handles those; at most
+                 GridViewModel.DefaultVisibleColumnCount (20) columns are ever realized, so
+                 virtualizing columns bought nothing to begin with. A concrete default width also
+                 avoids re-measuring every realized row whenever the page changes. -->
             <DataGrid x:Name="RowsDataGrid"
                       Margin="16"
                       Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}"
@@ -491,7 +501,9 @@
                       CanUserReorderColumns="True"
                       CanUserSortColumns="False"
                       EnableRowVirtualization="True"
-                      EnableColumnVirtualization="True"
+                      EnableColumnVirtualization="False"
+                      ColumnWidth="160"
+                      MinColumnWidth="60"
                       RowHeight="28"
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
