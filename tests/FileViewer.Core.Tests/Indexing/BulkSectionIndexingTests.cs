@@ -77,7 +77,7 @@ public class BulkSectionIndexingTests
         // The other section's field list and rows are left behind entirely.
         Assert.DoesNotContain("DVD_HIST", text);
         Assert.DoesNotContain("SEC1 Equity", text);
-        Assert.EndsWith("DATARECORDS=5\n", text);
+        Assert.EndsWith("DATARECORDS=5", text.TrimEnd('\r', '\n'));
     }
 
     [Fact]
@@ -119,5 +119,74 @@ public class BulkSectionIndexingTests
 
         Assert.Contains("SEC003", preview);
         Assert.DoesNotContain("SEC002", preview);
+    }
+
+    [Fact]
+    public async Task DifExport_OfAFileWithWindowsLineEndings_RoundTripsThoseToo()
+    {
+        // The exporter copies the header and trailer through byte-for-byte and regenerates only the
+        // rows. Written with a fixed "\n" that leaves a CRLF file with mixed line endings and no
+        // round trip — so the rows have to follow whatever the source used. Built here rather than
+        // checked in so the test means the same thing on every platform.
+        string path = Path.Combine(Path.GetTempPath(), $"fileviewer-crlf-{Guid.NewGuid():N}.dif");
+        string[] lines =
+        [
+            "INAHDR",
+            "FIRMNAME=testfirm",
+            "DELIMITER=|",
+            "START-OF-FIELDS",
+            "_ID",
+            "_ERR",
+            "PRICE",
+            "END-OF-FIELDS",
+            "START-OF-DATA",
+            "SEC001 HK Equity|0|100.50",
+            "SEC002 HK Equity|0|101.25",
+            "END-OF-DATA",
+            "INATRL",
+            "DATARECORDS=2",
+        ];
+        await File.WriteAllTextAsync(path, string.Join("\r\n", lines) + "\r\n");
+
+        try
+        {
+            using FileViewerSession session = await FileViewerSession.OpenAsync(path);
+            Assert.Equal("\r\n", session.FileIndex.Header.LineEnding);
+
+            using var buffer = new MemoryStream();
+            session.Export(buffer, new DifExporter(session.FileIndex));
+
+            Assert.Equal(await File.ReadAllBytesAsync(path), buffer.ToArray());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task DifExport_OfAFileWithUnixLineEndings_IsUnaffected()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"fileviewer-lf-{Guid.NewGuid():N}.dif");
+        await File.WriteAllTextAsync(path, string.Join('\n',
+        [
+            "INAHDR", "DELIMITER=|", "START-OF-FIELDS", "_ID", "_ERR", "PRICE", "END-OF-FIELDS",
+            "START-OF-DATA", "SEC001 HK Equity|0|100.50", "END-OF-DATA", "INATRL", "DATARECORDS=1",
+        ]) + "\n");
+
+        try
+        {
+            using FileViewerSession session = await FileViewerSession.OpenAsync(path);
+            Assert.Equal("\n", session.FileIndex.Header.LineEnding);
+
+            using var buffer = new MemoryStream();
+            session.Export(buffer, new DifExporter(session.FileIndex));
+
+            Assert.Equal(await File.ReadAllBytesAsync(path), buffer.ToArray());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }
