@@ -16,10 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 8 SDK
+      # Two SDKs on purpose. Everything targets net8.0/net8.0-windows, so the 8.0 runtime has to be
+      # present for the test host — but the code uses C# 13 language features, which the 8.0.4xx
+      # compiler rejects ("ref and unsafe in async and iterator methods" is in preview there). Asking
+      # only for 8.0.x used to work solely because the hosted runner happened to have a newer SDK
+      # earlier on PATH; naming 9.0.x makes that explicit instead of accidental.
+      - name: Setup .NET SDKs
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
       - name: Restore
         run: |

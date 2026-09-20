@@ -6,6 +6,7 @@ using FileViewer.Core.Filtering;
 using FileViewer.Core.Overlay;
 using FileViewer.Core.Session;
 using FileViewer.Core.Sorting;
+using FileViewer.Core.Statistics;
 
 namespace FileViewer.App.ViewModels;
 
@@ -40,6 +41,8 @@ public sealed class GridViewModel : ObservableObject
     private SearchModeOption _searchMode = SearchModeOption.Default;
     private bool _searchCaseSensitive;
     private bool _matchAllSearchTerms = true;
+    private bool _highlightInsteadOfFilter;
+    private int _currentMatchOrdinal = -1;
     private string _columnSearchText = string.Empty;
     private string? _currentSortColumn;
     private SortDirection _currentSortDirection = SortDirection.Ascending;
@@ -58,6 +61,9 @@ public sealed class GridViewModel : ObservableObject
             OnPropertyChanged(nameof(TotalRowCount));
             OnPropertyChanged(nameof(CanGoToPreviousPage));
             OnPropertyChanged(nameof(CanGoToNextPage));
+            OnPropertyChanged(nameof(MatchCount));
+            OnPropertyChanged(nameof(HasMatches));
+            OnPropertyChanged(nameof(MatchLabel));
             RebuildActiveFilterChips();
         };
         ColumnNames = session.FileIndex.Header.ColumnNames;
@@ -74,9 +80,11 @@ public sealed class GridViewModel : ObservableObject
         ApplySearchCommand = new AsyncRelayCommand(ApplySearchAsync, () => !IsBusy);
         AddSearchTermCommand = new AsyncRelayCommand(AddSearchTermAsync, () => !IsBusy && !string.IsNullOrEmpty(SearchText));
         ClearSearchCommand = new AsyncRelayCommand(
-            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ApplySearchAsync(SearchQuery.Empty)); }, () => !IsBusy);
+            () => { SearchText = string.Empty; return RunBusyAsync(() => ApplyQueryAsync(SearchQuery.Empty)); }, () => !IsBusy);
         ClearAllFiltersCommand = new AsyncRelayCommand(
             () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ClearAllFiltersAsync()); }, () => !IsBusy && HasActiveFilters);
+        NextMatchCommand = RelayCommand.Create(() => GoToMatch(1), () => HasMatches);
+        PreviousMatchCommand = RelayCommand.Create(() => GoToMatch(-1), () => HasMatches);
 
         PreviousPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex - 1), () => CanGoToPreviousPage && !IsBusy);
         NextPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex + 1), () => CanGoToNextPage && !IsBusy);
@@ -189,14 +197,77 @@ public sealed class GridViewModel : ObservableObject
             // Re-apply straight away so the toggle is visibly the thing that changed the row set.
             // While a filter is already running, the new mode simply takes effect on the next search
             // rather than starting a second overlapping one.
-            if (!IsBusy && Rows.CurrentSearchQuery.Criteria.Count > 1)
+            if (!IsBusy && ActiveQuery.Criteria.Count > 1)
             {
-                _ = RunBusyAsync(() => Rows.ApplySearchAsync(Rows.CurrentSearchQuery with { Combine = CurrentCombineMode }));
+                _ = RunBusyAsync(() => ApplyQueryAsync(ActiveQuery with { Combine = CurrentCombineMode }));
             }
         }
     }
 
     public string SearchCombineLabel => MatchAllSearchTerms ? "Match all" : "Match any";
+
+    /// <summary>
+    /// False (the default) hides everything that doesn't match; true keeps every row visible and
+    /// marks the matching cells instead. Highlighting is the right mode when the rows around a match
+    /// are the context you're reading — filtering them away is exactly what you don't want.
+    /// </summary>
+    public bool HighlightInsteadOfFilter
+    {
+        get => _highlightInsteadOfFilter;
+        set
+        {
+            if (!SetField(ref _highlightInsteadOfFilter, value)) return;
+            OnPropertyChanged(nameof(SearchModeLabel));
+
+            // Switching modes moves the current terms across rather than dropping them: whichever
+            // mode is now off must stop acting on the grid.
+            SearchQuery current = value ? Rows.CurrentSearchQuery : Rows.CurrentHighlightQuery;
+            _ = RunBusyAsync(async () =>
+            {
+                if (value)
+                {
+                    await Rows.ApplySearchAsync(SearchQuery.Empty);
+                    await Rows.ApplyHighlightAsync(current);
+                }
+                else
+                {
+                    await Rows.ApplyHighlightAsync(SearchQuery.Empty);
+                    await Rows.ApplySearchAsync(current);
+                }
+            });
+        }
+    }
+
+    public string SearchModeLabel => HighlightInsteadOfFilter ? "Highlight" : "Filter";
+
+    /// <summary>How many rows the highlight query matches — 0 when highlighting is off.</summary>
+    public int MatchCount => Rows.MatchPositions.Count;
+
+    public bool HasMatches => MatchCount > 0;
+
+    /// <summary>"3 of 412", or just the total before any match has been stepped to.</summary>
+    public string MatchLabel => MatchCount == 0
+        ? (Rows.HasHighlight ? "No matches" : string.Empty)
+        : _currentMatchOrdinal >= 0
+            ? $"{_currentMatchOrdinal + 1:N0} of {MatchCount:N0}"
+            : $"{MatchCount:N0} match(es)";
+
+    /// <summary>
+    /// Steps to the next (<paramref name="direction"/> = 1) or previous (-1) match, wrapping at
+    /// either end, and turns the page so it is on screen. Bound to F3 / Shift+F3 and the ‹ › buttons.
+    /// </summary>
+    public void GoToMatch(int direction)
+    {
+        IReadOnlyList<int> positions = Rows.MatchPositions;
+        if (positions.Count == 0) return;
+
+        _currentMatchOrdinal = _currentMatchOrdinal < 0
+            ? (direction >= 0 ? 0 : positions.Count - 1)
+            : ((_currentMatchOrdinal + direction) % positions.Count + positions.Count) % positions.Count;
+
+        Rows.GoToPage(positions[_currentMatchOrdinal] / Rows.PageSize);
+        OnPropertyChanged(nameof(MatchLabel));
+    }
 
     /// <summary>Scope options for the search box: "All columns" followed by every column of this section.</summary>
     public IReadOnlyList<string> SearchColumns { get; }
@@ -227,6 +298,8 @@ public sealed class GridViewModel : ObservableObject
     public ICommand UndoCommand { get; }
     public ICommand ApplySearchCommand { get; }
     public ICommand AddSearchTermCommand { get; }
+    public ICommand NextMatchCommand { get; }
+    public ICommand PreviousMatchCommand { get; }
     public ICommand ClearSearchCommand { get; }
     public ICommand ClearAllFiltersCommand { get; }
     public ICommand PreviousPageCommand { get; }
@@ -288,6 +361,12 @@ public sealed class GridViewModel : ObservableObject
             ? Task.FromResult(new DistinctValueResult([], false))
             : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName));
 
+    /// <summary>Summarizes a column over the rows in view — the column menu's Stats view. Returns an empty summary (rather than running) while <see cref="IsBusy"/>.</summary>
+    public Task<ColumnStatistics> GetColumnStatisticsAsync(string columnName) =>
+        IsBusy
+            ? Task.FromResult(ColumnStatistics.Empty(columnName))
+            : RunBusyAsync(() => Rows.GetColumnStatisticsAsync(columnName));
+
     /// <summary>Runs a background filter/sort computation with <see cref="IsBusy"/> set for its duration.</summary>
     private async Task RunBusyAsync(Func<Task> operation)
     {
@@ -348,21 +427,34 @@ public sealed class GridViewModel : ObservableObject
     }
 
     /// <summary>True once the search carries more than one term — what makes the match-all/match-any choice meaningful.</summary>
-    public bool HasMultipleSearchTerms => Rows.CurrentSearchQuery.Criteria.Count > 1;
+    public bool HasMultipleSearchTerms => ActiveQuery.Criteria.Count > 1;
 
-    /// <summary>Replaces the whole search with the term currently typed (an empty box clears it).</summary>
-    private Task ApplySearchAsync() =>
-        RunBusyAsync(() => Rows.ApplySearchAsync(
-            string.IsNullOrEmpty(SearchText) ? SearchQuery.Empty : new SearchQuery([BuildCriterion()], CurrentCombineMode)));
+    /// <summary>Replaces the whole search with the term currently typed (an empty box clears it), in whichever mode is active.</summary>
+    private Task ApplySearchAsync()
+    {
+        SearchQuery query = string.IsNullOrEmpty(SearchText)
+            ? SearchQuery.Empty
+            : new SearchQuery([BuildCriterion()], CurrentCombineMode);
+        return RunBusyAsync(() => ApplyQueryAsync(query));
+    }
 
     /// <summary>Adds the typed term to the search instead of replacing it, then clears the box ready for the next one.</summary>
     private Task AddSearchTermAsync()
     {
         if (string.IsNullOrEmpty(SearchText)) return Task.CompletedTask;
 
-        SearchQuery query = (Rows.CurrentSearchQuery with { Combine = CurrentCombineMode }).Add(BuildCriterion());
+        SearchQuery query = (ActiveQuery with { Combine = CurrentCombineMode }).Add(BuildCriterion());
         SearchText = string.Empty;
-        return RunBusyAsync(() => Rows.ApplySearchAsync(query));
+        return RunBusyAsync(() => ApplyQueryAsync(query));
+    }
+
+    /// <summary>The terms currently in force, from whichever of the two modes is active.</summary>
+    private SearchQuery ActiveQuery => HighlightInsteadOfFilter ? Rows.CurrentHighlightQuery : Rows.CurrentSearchQuery;
+
+    private Task ApplyQueryAsync(SearchQuery query)
+    {
+        _currentMatchOrdinal = -1;
+        return HighlightInsteadOfFilter ? Rows.ApplyHighlightAsync(query) : Rows.ApplySearchAsync(query);
     }
 
     private SearchCriterion BuildCriterion() => new(

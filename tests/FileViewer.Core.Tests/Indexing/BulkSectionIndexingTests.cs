@@ -90,4 +90,34 @@ public class BulkSectionIndexingTests
 
         Assert.Equal(await File.ReadAllBytesAsync(FixturePath("FixedIncomeAsia.dif")), buffer.ToArray());
     }
+
+    [Fact]
+    public async Task Export_WithAnExplicitRowOrder_WritesOnlyThoseRowsInThatOrder()
+    {
+        // What "export what the grid is showing" relies on: the caller hands over the filtered,
+        // sorted row order and gets exactly that back.
+        using FileViewerSession session = await FileViewerSession.OpenAsync(FixturePath("minimal_valid.dif"));
+
+        using var buffer = new MemoryStream();
+        session.Export(buffer, new CsvExporter(), [2L, 0L]);
+
+        string[] lines = Encoding.UTF8.GetString(buffer.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(3, lines.Length); // header + the two requested rows
+        Assert.Contains("SEC003", lines[1]);
+        Assert.Contains("SEC001", lines[2]);
+        Assert.DoesNotContain(lines, line => line.Contains("SEC002"));
+    }
+
+    [Fact]
+    public async Task GeneratePreview_WithAnExplicitRowOrder_PreviewsTheSameRowsTheExportWouldWrite()
+    {
+        using FileViewerSession session = await FileViewerSession.OpenAsync(FixturePath("minimal_valid.dif"));
+
+        string preview = session.GeneratePreview(new CsvExporter(), [2L, 0L]);
+
+        Assert.Contains("SEC003", preview);
+        Assert.DoesNotContain("SEC002", preview);
+    }
 }

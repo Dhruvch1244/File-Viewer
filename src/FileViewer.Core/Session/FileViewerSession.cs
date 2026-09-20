@@ -107,11 +107,24 @@ public sealed class FileViewerSession : IDisposable
         }
     }
 
+    /// <summary>Exports every row of this section, in the session's current sort order.</summary>
     public void Export(Stream stream, IRowExporter exporter, int? maxRows = null) =>
         ExportRunner.Export(stream, FileIndex, Overlay, Cache, GetExportRowOrder(), exporter, maxRows);
 
+    /// <summary>
+    /// Exports exactly the rows in <paramref name="rowOrder"/>, in that order — what the caller
+    /// needs to export "what is on screen" (the grid's filters and sort applied) or just the rows
+    /// the user has ticked, rather than the whole section.
+    /// </summary>
+    public void Export(Stream stream, IRowExporter exporter, IEnumerable<long> rowOrder, int? maxRows = null) =>
+        ExportRunner.Export(stream, FileIndex, Overlay, Cache, rowOrder, exporter, maxRows);
+
     public string GeneratePreview(IRowExporter exporter) =>
         PreviewGenerator.GeneratePreview(FileIndex, Overlay, Cache, GetExportRowOrder(), exporter);
+
+    /// <summary>Preview of the same rows <see cref="Export(Stream, IRowExporter, IEnumerable{long}, int?)"/> would write, so the preview can't disagree with the export.</summary>
+    public string GeneratePreview(IRowExporter exporter, IEnumerable<long> rowOrder) =>
+        PreviewGenerator.GeneratePreview(FileIndex, Overlay, Cache, rowOrder, exporter);
 
     public void Dispose()
     {

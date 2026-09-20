@@ -184,6 +184,26 @@ public sealed class CompiledSearchQuery
         return _combine == SearchCombineMode.All;
     }
 
+    /// <summary>
+    /// Whether one cell is worth highlighting for this query — used by the grid's highlight mode,
+    /// which keeps every row visible and marks where the matches are instead of filtering rows away.
+    ///
+    /// Two rules the row-level <see cref="Matches"/> doesn't need. A term scoped to a column only
+    /// highlights cells of that column, so a search for "USD" in CURRENCY doesn't light up a
+    /// coincidence elsewhere in the row. And a negative term ("does not contain") highlights
+    /// nothing: it is a statement about the row, with no particular cell to point at.
+    /// </summary>
+    public bool HighlightsCell(int columnIndex, string value)
+    {
+        foreach (CompiledCriterion criterion in _criteria)
+        {
+            if (criterion.IsNegated) continue;
+            if (criterion.ColumnIndex >= 0 && criterion.ColumnIndex != columnIndex) continue;
+            if (criterion.Matches(value)) return true;
+        }
+        return false;
+    }
+
     private static bool IsAscii(string text)
     {
         foreach (char c in text)
@@ -207,6 +227,15 @@ public sealed class CompiledSearchQuery
         public bool CaseSensitive { get; } = caseSensitive;
         public byte[]? RawNeedle { get; } = rawNeedle;
 
+        /// <summary>Index of the column this term is scoped to, or -1 for "any column".</summary>
+        public int ColumnIndex { get; } = columnIndex;
+
+        /// <summary>True for the "does not …" comparisons, which assert something about the row rather than matching a value.</summary>
+        public bool IsNegated => Mode is SearchMatchMode.NotContains or SearchMatchMode.NotEquals;
+
+        /// <summary>Tests one value directly — for per-cell highlighting, where the caller already knows which cell it is asking about.</summary>
+        public bool Matches(string value) => !columnMissing && MatchesValue(value);
+
         public bool Matches(IReadOnlyList<string> fields)
         {
             if (columnMissing)
@@ -215,9 +244,9 @@ public sealed class CompiledSearchQuery
                 return Mode is SearchMatchMode.NotContains or SearchMatchMode.NotEquals;
             }
 
-            if (columnIndex >= 0)
+            if (ColumnIndex >= 0)
             {
-                return MatchesValue(columnIndex < fields.Count ? fields[columnIndex] : string.Empty);
+                return MatchesValue(ColumnIndex < fields.Count ? fields[ColumnIndex] : string.Empty);
             }
 
             // "Any column" — a negative term must hold for every column, a positive one for at least one.

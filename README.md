@@ -13,18 +13,24 @@ virtualized scrolling instead of loading the whole file into memory.
 - **Handles large files without stalling.** Indexing runs on a background thread with progress
   reporting; the grid only ever decodes the rows currently on screen, backed by an unmanaged
   (non-GC-heap) row index and an LRU decoded-row cache. Filtering is a single parallel pass that
-  evaluates every active filter at once — see [How filtering stays fast](#how-filtering-stays-fast).
+  evaluates every active filter at once — see [how it stays fast](#how-search-sort-and-filter-stay-fast).
 - **Inline editing with full undo.** Edit any cell, add/duplicate/delete rows, bulk-delete a
   selection, and undo any of it — edits are tracked as an overlay on top of the original file, so
   the source file is never mutated until you export.
-- **Excel-style column filtering.** Click a column header to see the distinct values present in
-  that column and filter by them directly, without needing to already know what values exist.
-  Double-click a header to sort by it instead.
+- **Excel-style column filtering, with a summary.** The column menu lists the distinct values
+  actually present in that column so you can filter by them without knowing them in advance — and a
+  **Stats** view next to it summarizes the column over the rows in view: how many rows have a value,
+  how many are blank, how many distinct values there are, the extremes, and the sum and mean when
+  the values are numbers. It answers "is this column worth filtering on" before you filter on it.
 - **Search with as many terms as you need.** Each term carries its own scope (all columns, or one
   named column), comparison (contains / does not contain / is / is not / starts with / ends with /
   regex) and case sensitivity. "Find" searches with just the term you typed; "+ Add term" keeps the
   terms already applied and adds this one, and the match-all/match-any toggle decides whether a row
   has to satisfy every term or just one. Every active term shows as a chip you can remove on its own.
+- **Filter or highlight.** The same search runs either way: **Filter** hides everything that doesn't
+  match, **Highlight** keeps every row visible and marks the matching cells, with a match count and
+  ‹ › (or F3 / Shift+F3) to step through them. Highlighting is what you want when the rows around a
+  match are the context you're reading.
 - **Several files open at once, as tabs.** Each tab has its own rows, edits, sort, filters and
   column layout, so comparing two files doesn't mean reopening one to look at the other.
 - **Bulk (multi-section) files, detected automatically.** A bulk export repeats the whole
@@ -33,21 +39,28 @@ virtualized scrolling instead of loading the whole file into memory.
   a section bar, each as its own table. Detection is by content as well as by the "bulk" naming
   convention, so a bulk file that isn't named like one still opens correctly. Sections are indexed
   the first time you open them, not when the file opens — a ten-section file costs one structural
-  scan plus the sections you actually look at. Exporting shows only the section you're on, written
-  as an ordinary single-section DIF file.
+  scan plus the sections you actually look at. Export writes the section you're on as an ordinary
+  single-section DIF file — or every section at once, one file each.
 - **Select at scale.** A "select all" that spans every row matching the current filters — not just
   the page currently on screen — so bulk actions act on the full result set.
-- **Multi-format export.** Export to DIF, CSV, TSV, or JSON with a live preview of the first rows,
-  reflecting your current edits, sort, and filters.
-- **Light and dark themes**, toggled from the button in the toolbar.
+- **Multi-format export, scoped to what you mean.** DIF, CSV, TSV or JSON, with a live preview of the
+  first rows. By default it writes exactly the rows the grid is showing — edits, sort and filters
+  applied — or just the rows you have ticked, or (for a bulk file) every section at once as one file
+  per section, indexing any section you never opened so none is quietly skipped.
+- **Opens the way you'd expect.** Drop files onto the window, pass paths on the command line (so the
+  app works as the handler for a .dif), or pick from the recent-files list. Keyboard: **Ctrl+O** open,
+  **Ctrl+F** search, **Ctrl+W** close tab, **Ctrl+Tab** / **Ctrl+Shift+Tab** switch tabs, **Ctrl+E**
+  export, **Ctrl+Z** undo, **F3** / **Shift+F3** next/previous match, **Esc** close a popup.
+- **Light and dark themes**, toggled from the button in the toolbar — and remembered, along with your
+  recent files, between runs.
 - **No content validation gate.** The app shows records as they are in the file; it doesn't reject
   or flag rows for looking "malformed" — only structural file-format issues (e.g. a missing
   section marker) are surfaced as diagnostics.
 
-## How filtering stays fast
+## How search, sort and filter stay fast
 
-Filtering is the one operation that has to look at rows the grid isn't showing, so it is where the
-app either feels instant or doesn't. Four things it does:
+Searching, sorting and filtering are the operations that have to look at rows the grid isn't
+showing, so they are where the app either feels instant or doesn't. Five things they do:
 
 - **One pass, not one per filter.** The search terms and every column filter are compiled together
   into a single predicate set, so a row is read once and judged once instead of surviving one filter
@@ -60,6 +73,10 @@ app either feels instant or doesn't. Four things it does:
   a sequential read. Workers pull the file in 1 MB runs and serve rows out of that buffer rather than
   issuing a read per row; a scan in some other order (after an arbitrary-column sort) falls back to
   per-row reads automatically.
+- **Decide once, not once per comparison.** Sorting by an arbitrary column extracts that column's
+  values (and the number each parses as) in one pass, then sorts those. A comparison sort performs
+  n·log n comparisons, and parsing inside the comparison meant parsing both sides of every one of
+  them — around 40 million parses for 2 million rows, instead of 2 million.
 - **Spread across cores, cancel when stale.** Row reads are independent, so the scan is partitioned
   across cores and the results concatenated in partition order (which is the input order). The edit
   overlay is read from a lock-free snapshot rather than taking its lock twice per row, and a scan
@@ -67,14 +84,18 @@ app either feels instant or doesn't. Four things it does:
   rather than left to finish.
 
 Measured on a synthetic 82 MB file (2,000,000 rows, 4-core container), against the previous
-implementations of the same operations run back-to-back on the same machine and file:
+implementations of the same operations, run back-to-back in the same process on the same file:
 
-| Operation                                       |  Before |  After |
-| ----------------------------------------------- | ------: | -----: |
-| Search all columns for a substring               | 1446 ms |  17 ms |
-| Search one named column (forces full decoding)   | 1574 ms | 333 ms |
-| Search term + two column filters together        | 1659 ms |  52 ms |
-| Distinct values of a column (the filter popup)   | 1480 ms | 493 ms |
+| Operation                                       |   Before |   After |
+| ----------------------------------------------- | -------: | ------: |
+| Search all columns for a substring               |  1827 ms |   79 ms |
+| Search one named column (forces full decoding)   |  1775 ms |  151 ms |
+| Search term + two column filters together        |  2104 ms |  110 ms |
+| Sort by an arbitrary column                      | 10539 ms | 1256 ms |
+| Distinct values of a column (the filter popup)   |  1767 ms |  509 ms |
+
+Absolute timings move with machine load; the pairs above are from one run so the comparison is
+like-for-like.
 
 Run `benchmarks/FileViewer.Benchmarks` for the maintained versions of these measurements.
 

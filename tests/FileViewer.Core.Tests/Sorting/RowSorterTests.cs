@@ -1,5 +1,6 @@
 using System.Text;
 using FileViewer.Core.Caching;
+using FileViewer.Core.Filtering;
 using FileViewer.Core.Indexing;
 using FileViewer.Core.Native;
 using FileViewer.Core.Overlay;
@@ -143,5 +144,48 @@ public class RowSorterTests
         List<long> result = RowSorter.SortByColumn([2, 0, 1], "NO_SUCH_COLUMN", SortDirection.Ascending, index, overlay, cache);
 
         Assert.Equal([2L, 0L, 1L], result);
+    }
+
+    [Fact]
+    public async Task SortByColumn_TiedValues_KeepTheirOriginalRelativeOrder()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("minimal_valid.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        // Every row has _ERR = "0", so the sort is all ties: the input order has to survive, in both
+        // directions (the direction flips the comparison, never the tiebreak).
+        Assert.Equal([2L, 0L, 1L], RowSorter.SortByColumn([2, 0, 1], "_ERR", SortDirection.Ascending, index, overlay, cache));
+        Assert.Equal([2L, 0L, 1L], RowSorter.SortByColumn([2, 0, 1], "_ERR", SortDirection.Descending, index, overlay, cache));
+    }
+
+    [Fact]
+    public async Task SortByColumn_LargeInput_ProducesAFullyOrderedResultOverTheSameRows()
+    {
+        using FileIndex index = await FileIndexer.IndexAsync(FixturePath("FixedIncomeAsia.dif"));
+        var overlay = new EditOverlay();
+        var cache = new DecodedRowCache();
+
+        var rows = new List<long>();
+        for (long i = 0; i < (long)index.RowIndex.Count; i++) rows.Add(i);
+
+        // Repeat the rows until the parallel key-extraction path is the one that runs.
+        var repeated = new List<long>();
+        while (repeated.Count < RowQueryEngine.ParallelThresholdRows * 2) repeated.AddRange(rows);
+
+        List<long> sorted = RowSorter.SortByColumn(repeated, "PRICE", SortDirection.Ascending, index, overlay, cache);
+
+        Assert.Equal(repeated.Count, sorted.Count);
+        Assert.Equal(repeated.OrderBy(r => r), sorted.OrderBy(r => r)); // same rows, just reordered
+
+        int priceColumn = index.Header.ColumnIndexOf("PRICE");
+        string Price(long rowIndex) => RowResolver.Resolve(rowIndex, index, overlay, cache)!.FieldValues[priceColumn];
+
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            Assert.True(
+                NumericAwareStringComparer.Instance.Compare(Price(sorted[i - 1]), Price(sorted[i])) <= 0,
+                $"Row at position {i} sorts before the row before it.");
+        }
     }
 }

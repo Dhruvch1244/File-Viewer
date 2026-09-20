@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows.Input;
 using FileViewer.App.Common;
 using FileViewer.App.Logging;
+using FileViewer.App.Settings;
 using FileViewer.App.Theme;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Indexing;
@@ -23,6 +24,7 @@ namespace FileViewer.App.ViewModels;
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
+    private readonly AppSettings _settings = AppSettings.Load();
     private FileTabViewModel? _activeTab;
     private string _statusMessage = "No file open.";
     private double _indexingProgressPercent;
@@ -33,7 +35,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         ToggleThemeCommand = RelayCommand.Create(() => ThemeManager.Toggle());
         CloseTabCommand = RelayCommand.Create<FileTabViewModel>(CloseTab);
-        ThemeManager.ThemeChanged += theme => IsDarkTheme = theme == AppTheme.Dark;
+        OpenRecentFileCommand = new AsyncRelayCommand<string>(OpenFileAsync);
+
+        // Restore the remembered theme before anything is shown, so the app doesn't flash the
+        // default one on every launch.
+        if (Enum.TryParse(_settings.Theme, out AppTheme savedTheme))
+        {
+            ThemeManager.Apply(savedTheme);
+        }
+        IsDarkTheme = ThemeManager.Current == AppTheme.Dark;
+
+        ThemeManager.ThemeChanged += theme =>
+        {
+            IsDarkTheme = theme == AppTheme.Dark;
+            _settings.Theme = theme.ToString();
+            _settings.Save();
+        };
+
+        RefreshRecentFiles();
     }
 
     /// <summary>Every open file, in the order they were opened — the tab strip's source.</summary>
@@ -78,6 +97,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ICommand ToggleThemeCommand { get; }
     public ICommand CloseTabCommand { get; }
+
+    /// <summary>Opens one of <see cref="RecentFiles"/> — bound with the path as its parameter.</summary>
+    public ICommand OpenRecentFileCommand { get; }
+
+    /// <summary>Recently opened files that still exist on disk, newest first.</summary>
+    public ObservableCollection<string> RecentFiles { get; } = new();
+
+    public bool HasRecentFiles => RecentFiles.Count > 0;
 
     public string StatusMessage
     {
@@ -134,6 +161,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             Tabs.Add(tab);
             OnPropertyChanged(nameof(HasFileOpen));
 
+            _settings.RememberRecentFile(path);
+            _settings.Save();
+            RefreshRecentFiles();
+
             await ActivateTabAsync(tab);
             await ShowSectionAsync(tab, tab.Sections[0]);
         }
@@ -142,6 +173,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             // Malformed/unreadable files must fail gracefully, never crash the process (PRS §8).
             StatusMessage = $"Failed to open '{Path.GetFileName(path)}': {ex.Message}";
             FileLogger.Instance.LogError($"Failed to open '{path}'.", ex);
+
+            // A path that can no longer be opened (moved, deleted, permissions) shouldn't keep
+            // offering itself from the recent list.
+            if (!File.Exists(path))
+            {
+                _settings.ForgetRecentFile(path);
+                _settings.Save();
+                RefreshRecentFiles();
+            }
         }
         finally
         {
@@ -216,6 +256,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IndexingProgressPercent = 0;
         }
     }
+
+    /// <summary>Re-reads the recent list, dropping anything that no longer exists on disk.</summary>
+    private void RefreshRecentFiles()
+    {
+        RecentFiles.Clear();
+        foreach (string path in _settings.ExistingRecentFiles())
+        {
+            RecentFiles.Add(path);
+        }
+        OnPropertyChanged(nameof(HasRecentFiles));
+    }
+
+    /// <summary>Moves to the next (or previous) open tab, wrapping around — Ctrl+Tab / Ctrl+Shift+Tab.</summary>
+    public async Task CycleTabAsync(int offset)
+    {
+        if (Tabs.Count < 2 || ActiveTab is null) return;
+
+        int index = Tabs.IndexOf(ActiveTab);
+        int next = ((index + offset) % Tabs.Count + Tabs.Count) % Tabs.Count;
+        await ActivateTabAsync(Tabs[next]);
+    }
+
+    /// <summary>Closes whichever tab is on screen — Ctrl+W.</summary>
+    public void CloseActiveTab() => CloseTab(ActiveTab);
 
     /// <summary>Closes a tab, disposing every section it had indexed, and falls back to the neighbouring tab.</summary>
     public void CloseTab(FileTabViewModel? tab)

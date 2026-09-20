@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
@@ -14,6 +15,7 @@ using FileViewer.App.Collections;
 using FileViewer.App.ViewModels;
 using FileViewer.App.Views;
 using FileViewer.Core.Filtering;
+using FileViewer.Core.Statistics;
 using Microsoft.Win32;
 
 namespace FileViewer.App;
@@ -54,6 +56,119 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _viewModel;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        Loaded += OnWindowLoaded;
+    }
+
+    /// <summary>
+    /// Opens whatever was passed on the command line — how the app behaves when a .dif is opened
+    /// with it, or dragged onto its shortcut. Several paths open as several tabs.
+    /// </summary>
+    private async void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnWindowLoaded;
+
+        // Skip element 0: that is this executable's own path, not a file to open.
+        foreach (string argument in Environment.GetCommandLineArgs().Skip(1))
+        {
+            if (argument.StartsWith('-') || argument.StartsWith('/')) continue; // a switch, not a path
+            if (!File.Exists(argument)) continue;
+
+            await _viewModel.OpenFileAsync(argument);
+        }
+    }
+
+    /// <summary>Files dropped onto the window open as tabs — the same as choosing them from Open File.</summary>
+    private async void OnWindowDrop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths) return;
+
+        e.Handled = true;
+        foreach (string path in paths.Where(File.Exists))
+        {
+            await _viewModel.OpenFileAsync(path);
+        }
+    }
+
+    /// <summary>Shows the copy cursor only for a file drop, so dragging anything else reads as "not accepted" rather than silently doing nothing.</summary>
+    private void OnWindowDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Application-wide keyboard shortcuts. Handled here rather than as InputBindings so that one
+    /// place decides what a key does, and so a shortcut can act on the focused element (Ctrl+F puts
+    /// the caret in the search box) rather than only invoking a command.
+    ///
+    /// Only modifier combinations and the function keys are claimed — anything a user might be
+    /// typing into a cell or the search box passes straight through.
+    /// </summary>
+    private async void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        bool control = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+
+        if (e.Key == Key.F3)
+        {
+            e.Handled = true;
+            _viewModel.Grid?.GoToMatch(shift ? -1 : 1);
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            // Close whichever popup is open; otherwise let Escape do its normal job (cancelling a
+            // cell edit, which the DataGrid handles itself).
+            if (ColumnsPopup.IsOpen || ColumnFilterPopup.IsOpen || RecentFilesPopup.IsOpen)
+            {
+                ColumnsPopup.IsOpen = false;
+                ColumnFilterPopup.IsOpen = false;
+                RecentFilesPopup.IsOpen = false;
+                e.Handled = true;
+            }
+            return;
+        }
+
+        if (!control) return;
+
+        switch (e.Key)
+        {
+            case Key.O:
+                e.Handled = true;
+                await OpenFileViaDialogAsync();
+                break;
+
+            case Key.F:
+                e.Handled = true;
+                SearchTextBox.Focus();
+                SearchTextBox.SelectAll();
+                break;
+
+            case Key.W:
+                e.Handled = true;
+                _viewModel.CloseActiveTab();
+                break;
+
+            case Key.E:
+                e.Handled = true;
+                OnExportButtonClick(this, new RoutedEventArgs());
+                break;
+
+            case Key.Z:
+                if (_viewModel.Grid is { } grid && grid.UndoCommand.CanExecute(null))
+                {
+                    e.Handled = true;
+                    grid.UndoCommand.Execute(null);
+                }
+                break;
+
+            case Key.Tab:
+                e.Handled = true;
+                await _viewModel.CycleTabAsync(shift ? -1 : 1);
+                break;
+        }
     }
 
     /// <summary>Releases every open file's index/handles on close — each tab holds unmanaged row-index memory and an open file handle.</summary>
@@ -76,15 +191,30 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnOpenFileClick(object sender, RoutedEventArgs e)
+    private async void OnOpenFileClick(object sender, RoutedEventArgs e) => await OpenFileViaDialogAsync();
+
+    private async Task OpenFileViaDialogAsync()
     {
         // Any file is accepted — the app itself decides whether the content is a valid DIF file
         // and fails gracefully (with diagnostics) if not, so the dialog shouldn't gatekeep by extension.
-        var dialog = new OpenFileDialog { Filter = "All files (*.*)|*.*|DIF files (*.dif)|*.dif", FilterIndex = 1 };
+        var dialog = new OpenFileDialog
+        {
+            Filter = "All files (*.*)|*.*|DIF files (*.dif)|*.dif",
+            FilterIndex = 1,
+            Multiselect = true,
+        };
         if (dialog.ShowDialog() != true) return;
 
-        await _viewModel.OpenFileAsync(dialog.FileName);
+        foreach (string path in dialog.FileNames)
+        {
+            await _viewModel.OpenFileAsync(path);
+        }
     }
+
+    private void OnRecentFilesButtonClick(object sender, RoutedEventArgs e) => RecentFilesPopup.IsOpen = !RecentFilesPopup.IsOpen;
+
+    /// <summary>Closes the recent-files popup as soon as one is chosen, so the list doesn't hang over the file it just opened.</summary>
+    private void OnRecentFileClick(object sender, RoutedEventArgs e) => RecentFilesPopup.IsOpen = false;
 
     /// <summary>Tab strip: brings that file's grid to the front (indexing its section first if it has never been shown).</summary>
     private async void OnFileTabClick(object sender, RoutedEventArgs e)
@@ -99,6 +229,13 @@ public partial class MainWindow : Window
         if (sender is not FrameworkElement { DataContext: FileSectionViewModel section }) return;
         if (_viewModel.ActiveTab is not { } tab) return;
         await _viewModel.ShowSectionAsync(tab, section);
+    }
+
+    /// <summary>Flips between filtering rows away and highlighting them in place, carrying the current terms across.</summary>
+    private void OnToggleSearchModeClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.Grid is not { } grid) return;
+        grid.HighlightInsteadOfFilter = !grid.HighlightInsteadOfFilter;
     }
 
     /// <summary>Flips the multi-term search between "a row must match every term" and "any one term is enough".</summary>
@@ -146,7 +283,7 @@ public partial class MainWindow : Window
     {
         if (_viewModel.Grid is not { } grid) return;
 
-        var dialog = new ExportDialogView(grid.Session) { Owner = this };
+        var dialog = new ExportDialogView(grid, _viewModel.ActiveTab) { Owner = this };
         dialog.ShowDialog();
     }
 
@@ -313,6 +450,7 @@ public partial class MainWindow : Window
                 HeaderStyle = (Style)FindResource("DataColumnHeaderStyle"),
                 Binding = new Binding($"[{i}]") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.LostFocus },
                 EditingElementStyle = (Style)FindResource("CellEditTextBoxStyle"),
+                CellStyle = BuildHighlightableCellStyle(i),
                 // Bug fix: this must be set here, at creation, not only inside the PropertyChanged
                 // handler below — otherwise every column starts Visible regardless of
                 // GridColumnInfo.IsVisible's initial value (e.g. the "only first 20 by default" rule).
@@ -374,6 +512,27 @@ public partial class MainWindow : Window
             definition.PropertyChanged -= handler;
         }
         _wiredColumnDefinitions.Clear();
+    }
+
+    /// <summary>
+    /// A cell style for one data column that paints itself when the search's highlight mode marks
+    /// that cell. The column index has to be baked into the binding path (<c>CellMatch[3]</c>),
+    /// which is why this is built per column in code rather than being one shared XAML style: a
+    /// DataGridCell's DataContext is the row, and nothing in it says which column the cell is in.
+    /// </summary>
+    private Style BuildHighlightableCellStyle(int columnIndex)
+    {
+        var style = new Style(typeof(DataGridCell), (Style)FindResource(typeof(DataGridCell)));
+        var trigger = new DataTrigger
+        {
+            Binding = new Binding($"CellMatch[{columnIndex}]"),
+            Value = true,
+        };
+        // DynamicResource (not the brush itself) so the highlight re-colours with the theme.
+        trigger.Setters.Add(new Setter(BackgroundProperty, new DynamicResourceExtension("SearchHighlightBrush")));
+        trigger.Setters.Add(new Setter(ForegroundProperty, new DynamicResourceExtension("SearchHighlightTextBrush")));
+        style.Triggers.Add(trigger);
+        return style;
     }
 
     private static string HeaderTextFor(string columnName, bool isFiltered) =>
@@ -455,6 +614,8 @@ public partial class MainWindow : Window
         ColumnFilterLoadingText.Visibility = Visibility.Visible;
         ColumnFilterTruncatedText.Visibility = Visibility.Collapsed;
 
+        ShowColumnValuesView();
+
         ColumnFilterPopup.PlacementTarget = placementTarget;
         ColumnFilterPopup.IsOpen = true;
 
@@ -481,6 +642,78 @@ public partial class MainWindow : Window
         // typed into it before this point, that text was silently ignored (no view existed yet to
         // filter). Apply whatever it currently holds now that there's finally a view to apply it to.
         ApplyColumnFilterSearch();
+    }
+
+    // ============================== Column menu: values vs stats ==============================
+
+    private void OnColumnValuesModeClick(object sender, RoutedEventArgs e) => ShowColumnValuesView();
+
+    private async void OnColumnStatsModeClick(object sender, RoutedEventArgs e) => await ShowColumnStatsViewAsync();
+
+    private void ShowColumnValuesView()
+    {
+        ColumnValuesPanel.Visibility = Visibility.Visible;
+        ColumnStatsPanel.Visibility = Visibility.Collapsed;
+        UpdateColumnModeButtons(statsSelected: false);
+    }
+
+    /// <summary>
+    /// Switches the column menu to its summary view and computes it. Like the value list, the panel
+    /// appears immediately with a loading line and fills in when the (background) pass finishes,
+    /// rather than freezing the popup until it does.
+    /// </summary>
+    private async Task ShowColumnStatsViewAsync()
+    {
+        if (_activeFilterColumn is not { } columnName || _viewModel.Grid is not { } grid) return;
+
+        ColumnValuesPanel.Visibility = Visibility.Collapsed;
+        ColumnStatsPanel.Visibility = Visibility.Visible;
+        UpdateColumnModeButtons(statsSelected: true);
+
+        ColumnStatsList.ItemsSource = null;
+        ColumnStatsLoadingText.Visibility = Visibility.Visible;
+
+        ColumnStatistics stats = await grid.GetColumnStatisticsAsync(columnName);
+
+        // The popup may have closed or moved to another column while this was running.
+        if (!ColumnFilterPopup.IsOpen || _activeFilterColumn != columnName) return;
+
+        ColumnStatsLoadingText.Visibility = Visibility.Collapsed;
+        ColumnStatsList.ItemsSource = DescribeColumn(stats);
+    }
+
+    private void UpdateColumnModeButtons(bool statsSelected)
+    {
+        ColumnValuesModeButton.FontWeight = statsSelected ? FontWeights.Normal : FontWeights.SemiBold;
+        ColumnStatsModeButton.FontWeight = statsSelected ? FontWeights.SemiBold : FontWeights.Normal;
+    }
+
+    /// <summary>Turns a column summary into the label/value lines the popup lists. Numeric lines are omitted entirely for a column that holds no numbers, rather than shown as blanks.</summary>
+    private static List<ColumnStatLine> DescribeColumn(ColumnStatistics stats)
+    {
+        var lines = new List<ColumnStatLine>
+        {
+            new("Rows in view", $"{stats.RowCount:N0}"),
+            new("With a value", $"{stats.NonBlankCount:N0}"),
+            new("Blank", stats.BlankCount == 0 ? "0" : $"{stats.BlankCount:N0}  ({stats.BlankFraction:P0})"),
+            new("Distinct values", stats.DistinctTruncated ? $"{stats.DistinctCount:N0}+" : $"{stats.DistinctCount:N0}"),
+        };
+
+        if (stats.Min is not null) lines.Add(new ColumnStatLine("Lowest", stats.Min));
+        if (stats.Max is not null) lines.Add(new ColumnStatLine("Highest", stats.Max));
+
+        if (stats.NumericCount > 0)
+        {
+            if (!stats.IsFullyNumeric)
+            {
+                // Say so, rather than presenting a sum that silently ignores the rest of the column.
+                lines.Add(new ColumnStatLine("Numeric values", $"{stats.NumericCount:N0} of {stats.NonBlankCount:N0}"));
+            }
+            lines.Add(new ColumnStatLine("Sum", ColumnStatistics.FormatNumber(stats.Sum!.Value)));
+            lines.Add(new ColumnStatLine("Mean", ColumnStatistics.FormatNumber(stats.Mean!.Value)));
+        }
+
+        return lines;
     }
 
     private void OnColumnFilterSearchChanged(object sender, TextChangedEventArgs e) => ApplyColumnFilterSearch();
@@ -550,6 +783,9 @@ public partial class MainWindow : Window
         }
     }
 }
+
+/// <summary>One label/value line of the column menu's Stats view.</summary>
+public sealed record ColumnStatLine(string Label, string Value);
 
 /// <summary>One selectable value in a column's Excel-style filter popup.</summary>
 public sealed class ColumnFilterValueOption(string value, bool isSelected) : INotifyPropertyChanged

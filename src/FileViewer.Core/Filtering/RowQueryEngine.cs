@@ -1,8 +1,8 @@
-using System.Buffers;
 using FileViewer.Core.Caching;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Indexing;
 using FileViewer.Core.Overlay;
+using FileViewer.Core.Scanning;
 
 namespace FileViewer.Core.Filtering;
 
@@ -31,16 +31,6 @@ public static class RowQueryEngine
 {
     /// <summary>Row counts below this run on the calling thread — partitioning costs more than it saves.</summary>
     public const int ParallelThresholdRows = 8192;
-
-    /// <summary>Starting size of each worker's rented row buffer; grown on demand for a longer row.</summary>
-    private const int InitialRowBufferBytes = 8 * 1024;
-
-    /// <summary>
-    /// How much of the file a worker pulls in at a time when it is walking rows in file order.
-    /// Rows are contiguous on disk, so a scan in file order is a sequential read — reading it in
-    /// runs this size turns roughly 25,000 individual reads into one.
-    /// </summary>
-    private const int ScanChunkBytes = 1024 * 1024;
 
     /// <summary>Filters <paramref name="rowIndices"/> (order preserved), dropping deleted rows and anything the predicates reject.</summary>
     public static List<long> Filter(
@@ -116,7 +106,7 @@ public static class RowQueryEngine
         // flushing it with rows nothing will render.
         DecodedRowCache? scanCache = rowIndices.Count <= ParallelThresholdRows ? cache : null;
         bool overlayIsEmpty = snapshot.IsEmpty;
-        using var reader = new RowReader(fileIndex, snapshot, scanCache, IsAscending(rowIndices, 0, rowIndices.Count));
+        using var reader = new ScanRowReader(fileIndex, snapshot, scanCache, ScanRowReader.IsAscending(rowIndices, 0, rowIndices.Count));
         foreach (long rowIndex in rowIndices)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -152,7 +142,7 @@ public static class RowQueryEngine
         bool matchOnRawAlone = predicates.SupportsRawMatching;
         bool prefilterOnRaw = !matchOnRawAlone && predicates.HasRawPrefilter;
 
-        using var reader = new RowReader(fileIndex, snapshot, cache, IsAscending(rowIndices, start, end));
+        using var reader = new ScanRowReader(fileIndex, snapshot, cache, ScanRowReader.IsAscending(rowIndices, start, end));
         for (int i = start; i < end; i++)
         {
             if ((i & 0x3FF) == 0) cancellationToken.ThrowIfCancellationRequested();
@@ -188,20 +178,6 @@ public static class RowQueryEngine
         }
     }
 
-    /// <summary>
-    /// Whether a range of the row list runs in ascending (file) order — true for an unsorted or
-    /// "_ID"-sorted view, false once an arbitrary-column sort has shuffled it. Tells the row reader
-    /// whether reading ahead in file-sized runs will pay off or just thrash.
-    /// </summary>
-    private static bool IsAscending(IReadOnlyList<long> rowIndices, int start, int end)
-    {
-        for (int i = start + 1; i < end; i++)
-        {
-            if (rowIndices[i] < rowIndices[i - 1]) return false;
-        }
-        return true;
-    }
-
     private static int PartitionCount(int rowCount)
     {
         int byCores = Environment.ProcessorCount;
@@ -209,94 +185,6 @@ public static class RowQueryEngine
         return Math.Max(1, Math.Min(byCores, byWork));
     }
 
-    /// <summary>
-    /// Reads rows for one worker. Three things it does that a plain per-row read does not:
-    /// <list type="bullet">
-    /// <item>keeps one rented row buffer for every row it touches, rather than allocating per row;</item>
-    /// <item>when the rows come in file order, reads them in <see cref="ScanChunkBytes"/> runs and
-    /// serves them out of that buffer — rows are contiguous on disk, so a file-order scan is really
-    /// one sequential read, and issuing a separate read per row is what actually dominated scan time;</item>
-    /// <item>exposes the raw bytes, so a row can be rejected (or decoded) without a second read.</item>
-    /// </list>
-    /// The raw path is only offered for an unedited base row, whose file bytes are exactly what the
-    /// user sees.
-    /// </summary>
-    private sealed class RowReader(FileIndex fileIndex, OverlaySnapshot snapshot, DecodedRowCache? cache, bool rowsInFileOrder) : IDisposable
-    {
-        private byte[] _rowBuffer = ArrayPool<byte>.Shared.Rent(InitialRowBufferBytes);
-        private byte[]? _chunk = rowsInFileOrder ? ArrayPool<byte>.Shared.Rent(ScanChunkBytes) : null;
-        private long _chunkStart = -1;
-        private int _chunkLength;
-
-        public bool TryReadRawRow(long rowIndex, out ReadOnlySpan<byte> raw)
-        {
-            raw = default;
-            if (rowIndex < 0) return false;                                  // added/duplicated row — no file bytes
-            if (!snapshot.IsEmpty && snapshot.TryGetCellEdits(rowIndex, out _)) return false; // edited — bytes are stale
-
-            (long offset, int length) = fileIndex.GetRowExtent(rowIndex);
-
-            if (_chunk is not null && length <= _chunk.Length)
-            {
-                // Refill only when moving forward: a backwards jump means this isn't a file-order
-                // walk after all, and re-reading a whole run for one row would cost more than the
-                // single read below.
-                if (_chunkStart < 0 || offset >= _chunkStart + _chunkLength)
-                {
-                    _chunkStart = offset;
-                    _chunkLength = fileIndex.ReadBytes(_chunk, offset);
-                }
-
-                if (offset >= _chunkStart && offset + length <= _chunkStart + _chunkLength)
-                {
-                    raw = new ReadOnlySpan<byte>(_chunk, (int)(offset - _chunkStart), length);
-                    return true;
-                }
-            }
-
-            if (length > _rowBuffer.Length) Grow(length);
-
-            int read = fileIndex.TryReadRowBytes(rowIndex, _rowBuffer);
-            if (read < 0) return false;
-            raw = new ReadOnlySpan<byte>(_rowBuffer, 0, read);
-            return true;
-        }
-
-        /// <summary>Splits bytes already read by <see cref="TryReadRawRow"/> into field values — no second read, and no overlay work (the raw path is only offered for rows that have none).</summary>
-        public string[] ParseFields(ReadOnlySpan<byte> raw) =>
-            DifRowParser.ParseRow(raw, (byte)fileIndex.Header.Delimiter, DifFormatOptions.TextEncoding);
-
-        /// <summary>
-        /// A row's field values, or null if it is a tombstone. Without a cache to consult (a large
-        /// scan, where filling one would evict the rows the visible page needs anyway) an unedited
-        /// row goes through the same read-ahead buffer the raw path uses, instead of a read of its
-        /// own; with a cache (a small set, which a repeat filter is likely to revisit) the cached
-        /// decode wins and is used.
-        /// </summary>
-        public IReadOnlyList<string>? GetFields(long rowIndex)
-        {
-            if (cache is null && TryReadRawRow(rowIndex, out ReadOnlySpan<byte> raw))
-            {
-                return ParseFields(raw);
-            }
-            return ResolveFields(rowIndex);
-        }
-
-        public IReadOnlyList<string>? ResolveFields(long rowIndex) =>
-            RowResolver.Resolve(rowIndex, fileIndex, snapshot, cache)?.FieldValues;
-
-        private void Grow(int required)
-        {
-            ArrayPool<byte>.Shared.Return(_rowBuffer);
-            _rowBuffer = ArrayPool<byte>.Shared.Rent(required);
-        }
-
-        public void Dispose()
-        {
-            ArrayPool<byte>.Shared.Return(_rowBuffer);
-            if (_chunk is not null) ArrayPool<byte>.Shared.Return(_chunk);
-        }
-    }
 }
 
 /// <summary>The distinct values of a column, and whether the lookup stopped early at its cap.</summary>

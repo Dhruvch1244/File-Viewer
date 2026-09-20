@@ -29,6 +29,13 @@
     <SolidColorBrush x:Key="PaleBlueTextBrush" Color="#1F6C9F" />
     <SolidColorBrush x:Key="PaleGreenBrush" Color="#EDF3EC" />
     <SolidColorBrush x:Key="PaleGreenTextBrush" Color="#346538" />
+    <!-- Search highlight: the cell background used by the grid's highlight mode, where matches are
+         marked in place rather than filtered to. Deliberately its own key rather than reusing the
+         pale-yellow status colour — this one has to stay legible under the grid's own row striping
+         and selection, so it is tuned separately. -->
+    <SolidColorBrush x:Key="SearchHighlightBrush" Color="#FCEFB4" />
+    <SolidColorBrush x:Key="SearchHighlightTextBrush" Color="#6B5200" />
+
     <SolidColorBrush x:Key="PaleYellowBrush" Color="#FBF3DB" />
     <SolidColorBrush x:Key="PaleYellowTextBrush" Color="#956400" />
 

@@ -4,6 +4,7 @@ using FileViewer.App.ViewModels;
 using FileViewer.Core.Filtering;
 using FileViewer.Core.Native;
 using FileViewer.Core.Session;
+using FileViewer.Core.Statistics;
 
 namespace FileViewer.App.Collections;
 
@@ -67,6 +68,10 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
 
     private CancellationTokenSource? _recomputeCts;
 
+    private SearchQuery _highlightQuery = SearchQuery.Empty;
+    private CompiledSearchQuery _compiledHighlight = CompiledSearchQuery.Empty;
+    private int[] _matchPositions = [];
+
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
     private long[] EffectiveOrder => _effectiveOrder ??= [.. BuildCandidates(excludingColumn: null, CancellationToken.None)];
@@ -78,6 +83,21 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
 
     /// <summary>The main search's current (possibly multi-term) query — for the "what am I filtering by" summary.</summary>
     public SearchQuery CurrentSearchQuery => _searchQuery;
+
+    /// <summary>
+    /// The query being highlighted rather than filtered by. Highlight mode answers "where is it"
+    /// instead of "show me only those": every row stays visible and the matching cells are marked,
+    /// which is what you want when the surrounding rows are the context you're reading.
+    /// </summary>
+    public SearchQuery CurrentHighlightQuery => _highlightQuery;
+
+    /// <summary>The compiled form of <see cref="CurrentHighlightQuery"/>, handed to each row so a cell can test itself.</summary>
+    public CompiledSearchQuery CompiledHighlight => _compiledHighlight;
+
+    /// <summary>Positions within the current row order that match the highlight query, ascending — what next/previous match navigation steps through.</summary>
+    public IReadOnlyList<int> MatchPositions => _matchPositions;
+
+    public bool HasHighlight => !_highlightQuery.IsEmpty;
 
     /// <summary>Every column with an active Excel-style value filter, and the value set it's restricted to — for the "what am I filtering by" summary.</summary>
     public IReadOnlyDictionary<string, HashSet<string>> ColumnValueFilters => _columnValueFilters;
@@ -183,6 +203,54 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         await RecomputeAndInstallAsync();
     }
 
+    /// <summary>
+    /// Sets (or clears) the highlight query. Unlike <see cref="ApplySearchAsync"/> this leaves the
+    /// row order alone — it only works out which rows match, so the view can mark them and step
+    /// between them. The scan still happens on a background thread, since finding the matches costs
+    /// what filtering by the same terms would.
+    /// </summary>
+    public async Task ApplyHighlightAsync(SearchQuery query)
+    {
+        _highlightQuery = query;
+        _compiledHighlight = CompiledSearchQuery.Compile(query, session.FileIndex.Header);
+        await RecomputeMatchesAsync();
+    }
+
+    private async Task RecomputeMatchesAsync()
+    {
+        _pageRowCache.Clear(); // the cached rows carry the old compiled query
+
+        if (_highlightQuery.IsEmpty)
+        {
+            _matchPositions = [];
+            RaiseReset();
+            return;
+        }
+
+        long[] order = EffectiveOrder;
+        RowPredicateSet predicates = RowPredicateSet.Compile(_highlightQuery, null, null, session.FileIndex.Header);
+
+        int[] positions = await Task.Run(() =>
+        {
+            List<long> matched = RowQueryEngine.Filter(order, predicates, session.FileIndex, session.Overlay, session.Cache);
+
+            // The engine preserves input order, so walking both lists together turns matched row
+            // indices into their positions in the view without a lookup table.
+            var result = new List<int>(matched.Count);
+            int position = 0;
+            foreach (long rowIndex in matched)
+            {
+                while (position < order.Length && order[position] != rowIndex) position++;
+                if (position >= order.Length) break;
+                result.Add(position++);
+            }
+            return result.ToArray();
+        });
+
+        _matchPositions = positions;
+        RaiseReset();
+    }
+
     /// <summary>Overrides the base-row order with a precomputed sort (used for clicking a non-"_ID" column header — see <see cref="ViewModels.GridViewModel.SortByColumnAsync"/>). The sort itself is already computed by the caller; installing it here is cheap, so this stays synchronous.</summary>
     public void ApplyCustomOrder(long[] order)
     {
@@ -212,6 +280,18 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         Task.Run(() => RowQueryEngine.GetDistinctValues(
             BuildCandidates(excludingColumn: columnName, CancellationToken.None),
             columnName, session.FileIndex, session.Overlay, session.Cache));
+
+    /// <summary>
+    /// Summarizes one column over the rows currently in view — counts, distinct values, extremes and
+    /// (where the values are numbers) the numeric totals. Computed on a background thread over a
+    /// snapshot of the current row order, like every other whole-column pass here.
+    /// </summary>
+    public Task<ColumnStatistics> GetColumnStatisticsAsync(string columnName)
+    {
+        long[] order = EffectiveOrder;
+        return Task.Run(() => ColumnStatisticsCalculator.Compute(
+            order, columnName, session.FileIndex, session.Overlay, session.Cache));
+    }
 
     /// <summary>The currently-selected value set for a column's filter, or null if no filter is active on it.</summary>
     public HashSet<string>? GetColumnValueFilter(string columnName) =>
@@ -287,6 +367,10 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
             _effectiveOrder = computed;
             _pageIndex = 0;
             RaiseReset();
+
+            // Match positions refer to the row order, so a new order means they have to be found
+            // again (a filter change never silently leaves stale highlights behind).
+            if (!_highlightQuery.IsEmpty) await RecomputeMatchesAsync();
         }
         catch (OperationCanceledException)
         {
@@ -315,7 +399,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
             return existing;
         }
 
-        var row = new RowViewModel(session, rowIndex, selection);
+        var row = new RowViewModel(session, rowIndex, selection, _compiledHighlight);
         _pageRowCache[rowIndex] = row;
         return row;
     }
