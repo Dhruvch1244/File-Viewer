@@ -779,53 +779,64 @@
         <!-- Each entry names what lands on the clipboard, with the reason underneath, because
              "Copy as CSV" and "Copy without headers" are indistinguishable from the default until
              you have already pasted somewhere and looked. -->
+        <!-- Three independent, orthogonal choices rather than a list of named presets. The presets
+             this replaced ("Selected rows as CSV", "Selected rows, no headers", ...) only ever covered
+             part of the space — there was no way to get all-columns, or JSON, or all-columns-as-JSON
+             without this becoming a much longer list of increasingly specific sentences. RadioButtons
+             sharing a GroupName give "exactly one of these" for free; Copy reads whichever is checked
+             when clicked, so there's one code path instead of one handler per preset. -->
         <Popup x:Name="CopyOptionsPopup" PlacementTarget="{Binding ElementName=CopyOptionsButton}" Placement="Bottom"
                StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
             <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
-                    CornerRadius="8" Padding="8" Width="300" Margin="0,4,0,0">
+                    CornerRadius="8" Padding="12" Width="300" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <StackPanel>
-                    <TextBlock Text="COPY" Style="{StaticResource SectionLabelStyle}" Margin="8,4,8,8" />
+                    <TextBlock Text="COPY" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,10" />
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyDefaultMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Selected rows" FontSize="12.5" />
-                            <TextBlock Text="With headers, tab-separated — what the Copy button does"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="ROWS" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,5" />
+                    <StackPanel Style="{StaticResource SegmentedOptionRowStyle}" Margin="0,0,0,10">
+                        <RadioButton x:Name="CopyRowsSelectedOption" Content="Selected" GroupName="CopyRows"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}" IsChecked="True" Margin="0,0,6,0"
+                                     ToolTip="The ticked rows, or the row you have open if nothing is ticked" />
+                        <RadioButton x:Name="CopyRowsAllInViewOption" Content="All in view" GroupName="CopyRows"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}"
+                                     ToolTip="Every row the current filters leave, across all pages — ticked or not" />
+                    </StackPanel>
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyWithoutHeadersMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Selected rows, no headers" FontSize="12.5" />
-                            <TextBlock Text="Values only — for pasting under rows you already have"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="COLUMNS" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,5" />
+                    <StackPanel Style="{StaticResource SegmentedOptionRowStyle}" Margin="0,0,0,10">
+                        <RadioButton x:Name="CopyColumnsVisibleOption" Content="Visible only" GroupName="CopyColumns"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}" IsChecked="True" Margin="0,0,6,0"
+                                     ToolTip="Only the columns currently shown in the grid" />
+                        <RadioButton x:Name="CopyColumnsAllOption" Content="All (original record)" GroupName="CopyColumns"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}"
+                                     ToolTip="Every column the row declares, whether or not it's currently shown — the same as what Export writes" />
+                    </StackPanel>
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyAsCsvMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Selected rows as CSV" FontSize="12.5" />
-                            <TextBlock Text="Commas and quoting, the same as an exported .csv"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <TextBlock Text="FORMAT" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,5" />
+                    <StackPanel Style="{StaticResource SegmentedOptionRowStyle}" Margin="0,0,0,10">
+                        <RadioButton x:Name="CopyFormatTsvOption" Content="Tab-separated" GroupName="CopyFormat"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}" IsChecked="True" Margin="0,0,6,0"
+                                     Checked="OnCopyFormatChanged" ToolTip="Pastes straight into Excel or Sheets cells" />
+                        <RadioButton x:Name="CopyFormatCsvOption" Content="CSV" GroupName="CopyFormat"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}" Margin="0,0,6,0"
+                                     Checked="OnCopyFormatChanged" ToolTip="Comma-separated with quoting, the same as an exported .csv" />
+                        <RadioButton x:Name="CopyFormatJsonOption" Content="JSON" GroupName="CopyFormat"
+                                     Style="{StaticResource SegmentedOptionButtonStyle}"
+                                     Checked="OnCopyFormatChanged" ToolTip="An array of objects, column name to value — the same as an exported .json" />
+                    </StackPanel>
 
-                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="8,6" />
+                    <CheckBox x:Name="CopyIncludeHeadersOption" Content="Include column names" IsChecked="True"
+                              Margin="4,0,4,0"
+                              ToolTip="JSON always carries column names — that's what makes it JSON — so this has nothing to turn off there" />
 
-                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
-                            Click="OnCopyAllRowsMenuClick">
-                        <StackPanel>
-                            <TextBlock Text="Every row in view" FontSize="12.5" />
-                            <TextBlock Text="Everything the filters leave, across all pages — ticked or not"
-                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Button>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                        <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Margin="0,0,8,0"
+                                Click="OnCopyOptionsCancelClick" />
+                        <Button Content="Copy" Style="{StaticResource PrimaryButtonStyle}" Padding="16,5" Click="OnCopyOptionsApplyClick" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Popup>
