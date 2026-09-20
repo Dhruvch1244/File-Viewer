@@ -23,6 +23,16 @@ public sealed class FileIndex : IDisposable
     public string FilePath { get; }
     public long FileLength { get; }
     public DifFileHeader Header { get; }
+
+    /// <summary>
+    /// The file's full structural layout — every section it declares, not just the one this index
+    /// covers. Carried here so switching to another section of a bulk file re-uses the scan that
+    /// already happened instead of walking the file again (see <see cref="FileIndexer.IndexSectionAsync"/>).
+    /// </summary>
+    public DifFileLayout Layout { get; }
+
+    /// <summary>Which of <see cref="Layout"/>'s sections this index covers. Always 0 for an ordinary single-section file.</summary>
+    public int SectionIndex => Header.SectionIndex;
     public UnmanagedArray<RowIndexEntry> RowIndex { get; }
     public UnmanagedArray<SortKey> SortKeys { get; }
     public IReadOnlyList<DifDiagnostic> Diagnostics { get; }
@@ -32,6 +42,7 @@ public sealed class FileIndex : IDisposable
         long fileLength,
         SafeFileHandle fileHandle,
         DifFileHeader header,
+        DifFileLayout layout,
         UnmanagedArray<RowIndexEntry> rowIndex,
         UnmanagedArray<SortKey> sortKeys,
         IReadOnlyList<DifDiagnostic> diagnostics)
@@ -40,6 +51,7 @@ public sealed class FileIndex : IDisposable
         FileLength = fileLength;
         _fileHandle = fileHandle;
         Header = header;
+        Layout = layout;
         RowIndex = rowIndex;
         SortKeys = sortKeys;
         Diagnostics = diagnostics;
@@ -58,6 +70,52 @@ public sealed class FileIndex : IDisposable
         byte[] buffer = new byte[entry.Length];
         RandomAccessReader.ReadExactly(_fileHandle, buffer, entry.Offset);
         return buffer;
+    }
+
+    /// <summary>
+    /// Reads a row's bytes into a caller-supplied buffer, returning how many bytes it occupies (or
+    /// -1 if <paramref name="destination"/> is too small, so the caller can grow and retry). The
+    /// scanning paths (filtering, distinct values) go through this rather than
+    /// <see cref="GetRowBytes"/> so that walking millions of rows reuses one pooled buffer per
+    /// worker instead of allocating a fresh array per row.
+    /// </summary>
+    public int TryReadRowBytes(long rowIndex, Span<byte> destination)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ref RowIndexEntry entry = ref RowIndex[rowIndex];
+        if (entry.Length > destination.Length) return -1;
+        return RandomAccessReader.ReadExactly(_fileHandle, destination[..entry.Length], entry.Offset);
+    }
+
+    /// <summary>
+    /// Reads up to <paramref name="destination"/>.Length bytes of the file starting at
+    /// <paramref name="offset"/>, returning how many were read. Used by the scanning paths to pull in
+    /// a whole run of rows at once rather than issuing one read per row — rows are contiguous in file
+    /// order, so a scan that walks them in that order is really a sequential read pretending to be
+    /// millions of random ones.
+    /// </summary>
+    public int ReadBytes(Span<byte> destination, long offset)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (offset < 0 || offset >= FileLength) return 0;
+
+        int toRead = (int)Math.Min(destination.Length, FileLength - offset);
+        return RandomAccessReader.ReadExactly(_fileHandle, destination[..toRead], offset);
+    }
+
+    /// <summary>The offset/length of a row as recorded by the indexer.</summary>
+    public (long Offset, int Length) GetRowExtent(long rowIndex)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ref RowIndexEntry entry = ref RowIndex[rowIndex];
+        return (entry.Offset, entry.Length);
+    }
+
+    /// <summary>Byte length of a row as recorded by the indexer — lets a caller size a buffer before calling <see cref="TryReadRowBytes"/>.</summary>
+    public int GetRowByteLength(long rowIndex)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return RowIndex[rowIndex].Length;
     }
 
     /// <summary>

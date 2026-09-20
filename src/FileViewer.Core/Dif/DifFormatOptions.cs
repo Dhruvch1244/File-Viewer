@@ -37,6 +37,22 @@ public static class DifFormatOptions
     public const string FileEnd = "END-OF-FILE";
 
     public const string DelimiterKey = "DELIMITER";
+
+    /// <summary>
+    /// Key of the KEY=VALUE attribute that names a section in a multi-section ("bulk") export —
+    /// e.g. <c>DATA=DVD_HIST</c>. A bulk file repeats the whole
+    /// START-OF-FIELDS/END-OF-FIELDS/START-OF-DATA/END-OF-DATA block once per requested bulk field,
+    /// each block carrying its own field list and its own DATA= name. See <see cref="DifSectionScanner"/>.
+    /// </summary>
+    public const string SectionDataKey = "DATA";
+
+    /// <summary>
+    /// Substring that marks a file name as a bulk (multi-section) export. Its presence is what
+    /// makes the app pay for the sequential section scan instead of the cheap bounded head/tail
+    /// parse — see <see cref="DifBulkDetection"/> for the full detection rule (content is also
+    /// checked, so a bulk file that isn't named "bulk" is still detected).
+    /// </summary>
+    public const string BulkFileNameMarker = "bulk";
     public const string DataRecordsKey = "DATARECORDS";
 
     /// <summary>

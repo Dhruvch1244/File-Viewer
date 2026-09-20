@@ -1,4 +1,5 @@
 using FileViewer.Core.Caching;
+using FileViewer.Core.Dif;
 using FileViewer.Core.Export;
 using FileViewer.Core.Indexing;
 using FileViewer.Core.Native;
@@ -19,6 +20,15 @@ public sealed class FileViewerSession : IDisposable
     private bool _disposed;
 
     public FileIndex FileIndex { get; }
+
+    /// <summary>The whole file's structure, including sections this session isn't showing — see <see cref="OpenSectionAsync"/>.</summary>
+    public DifFileLayout Layout => FileIndex.Layout;
+
+    /// <summary>Every data section the file declares. One entry for an ordinary export; one per <c>DATA=</c> block for a bulk export.</summary>
+    public IReadOnlyList<DifSection> Sections => Layout.Sections;
+
+    /// <summary>Which section this session is showing.</summary>
+    public int SectionIndex => FileIndex.SectionIndex;
     public EditOverlay Overlay { get; } = new();
     public DecodedRowCache Cache { get; }
 
@@ -26,6 +36,13 @@ public sealed class FileViewerSession : IDisposable
     public UnmanagedArray<SortKey> CurrentOrder => _sortedOrder ?? FileIndex.SortKeys;
 
     public SortDirection? CurrentSortDirection { get; private set; }
+
+    /// <summary>
+    /// True when this session holds edits that exist nowhere but in memory. The source file is never
+    /// written to, so everything edited is lost unless it is exported — which is why closing needs to
+    /// ask first.
+    /// </summary>
+    public bool HasPendingEdits => !Overlay.IsEmpty;
 
     private FileViewerSession(FileIndex fileIndex, int cacheCapacity)
     {
@@ -40,6 +57,24 @@ public sealed class FileViewerSession : IDisposable
         CancellationToken cancellationToken = default)
     {
         FileIndex index = await FileIndexer.IndexAsync(path, progress, cancellationToken);
+        return new FileViewerSession(index, cacheCapacity);
+    }
+
+    /// <summary>
+    /// Opens one section of a file whose structure has already been scanned — how a bulk file's
+    /// other sections are reached. Each section gets its own session (and therefore its own row
+    /// index, edit overlay, cache, sort and filters), and only the sections actually opened are ever
+    /// indexed.
+    /// </summary>
+    public static async Task<FileViewerSession> OpenSectionAsync(
+        string path,
+        DifFileLayout layout,
+        int sectionIndex,
+        int cacheCapacity = DecodedRowCache.DefaultCapacity,
+        IProgress<IndexingProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        FileIndex index = await FileIndexer.IndexSectionAsync(path, layout, sectionIndex, progress, cancellationToken);
         return new FileViewerSession(index, cacheCapacity);
     }
 
@@ -79,11 +114,30 @@ public sealed class FileViewerSession : IDisposable
         }
     }
 
+    /// <summary>Exports every row of this section, in the session's current sort order.</summary>
     public void Export(Stream stream, IRowExporter exporter, int? maxRows = null) =>
         ExportRunner.Export(stream, FileIndex, Overlay, Cache, GetExportRowOrder(), exporter, maxRows);
 
+    /// <summary>
+    /// Exports exactly the rows in <paramref name="rowOrder"/>, in that order — what the caller
+    /// needs to export "what is on screen" (the grid's filters and sort applied) or just the rows
+    /// the user has ticked, rather than the whole section.
+    /// </summary>
+    public void Export(
+        Stream stream,
+        IRowExporter exporter,
+        IEnumerable<long> rowOrder,
+        int? maxRows = null,
+        IProgress<long>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        ExportRunner.Export(stream, FileIndex, Overlay, Cache, rowOrder, exporter, maxRows, progress, cancellationToken);
+
     public string GeneratePreview(IRowExporter exporter) =>
         PreviewGenerator.GeneratePreview(FileIndex, Overlay, Cache, GetExportRowOrder(), exporter);
+
+    /// <summary>Preview of the same rows <see cref="Export(Stream, IRowExporter, IEnumerable{long}, int?)"/> would write, so the preview can't disagree with the export.</summary>
+    public string GeneratePreview(IRowExporter exporter, IEnumerable<long> rowOrder) =>
+        PreviewGenerator.GeneratePreview(FileIndex, Overlay, Cache, rowOrder, exporter);
 
     public void Dispose()
     {

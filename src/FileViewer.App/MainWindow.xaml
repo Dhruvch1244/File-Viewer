@@ -9,9 +9,12 @@
         Title="Bloomberg File Viewer" Icon="Assets/AppIcon.ico" Height="720" Width="1280"
         Background="{DynamicResource CanvasBrush}"
         FontFamily="{DynamicResource UiFontFamily}"
-        FontSize="13">
+        FontSize="13"
+        AllowDrop="True" Drop="OnWindowDrop" DragOver="OnWindowDragOver"
+        PreviewKeyDown="OnWindowPreviewKeyDown">
     <Window.Resources>
         <sysconv:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+        <local:FileNameConverter x:Key="FileNameConverter" />
 
         <DataTemplate x:Key="SelectAllHeaderTemplate">
             <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -82,6 +85,71 @@
         <Style x:Key="FilterValueCheckBoxStyle" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
             <Setter Property="Margin" Value="4,3" />
         </Style>
+
+        <!-- One open file in the tab strip: click the label to bring it forward, ✕ to close it. -->
+        <DataTemplate x:Key="FileTabTemplate">
+            <Border Margin="0,0,6,0" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0" MouseDown="OnTabMouseDown">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="BorderBrush" Value="Transparent" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="12,6" Click="OnFileTabClick"
+                            ToolTip="{Binding FilePath}" AutomationProperties.Name="{Binding Title}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontSize="12.5" TextTrimming="CharacterEllipsis" MaxWidth="200" />
+                            <TextBlock Text="{Binding SectionSummary}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasMultipleSections}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Button>
+                    <Button Content="✕" FontSize="10" Padding="6,4" Margin="0,0,4,0" VerticalAlignment="Center"
+                            Style="{StaticResource ToolbarButtonStyle}" ToolTip="Close this file"
+                            Command="{Binding DataContext.CloseTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                            CommandParameter="{Binding}" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <!-- One DATA= section of a bulk file. Sections are indexed the first time they're opened,
+             so an unvisited one costs nothing until it's clicked. -->
+        <DataTemplate x:Key="FileSectionTemplate">
+            <Button Style="{StaticResource ToolbarButtonStyle}" Padding="12,5" Margin="0,0,6,0" Click="OnSectionChipClick"
+                    ToolTip="{Binding ColumnCount, StringFormat='{}{0} column(s) in this section'}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding DisplayLabel}" FontSize="12">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                        <Setter Property="Foreground" Value="{DynamicResource AccentDarkBrush}" />
+                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Button>
+        </DataTemplate>
     </Window.Resources>
     <Grid>
         <DockPanel>
@@ -90,7 +158,11 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
                 <DockPanel Margin="16,10">
                     <Button DockPanel.Dock="Right" x:Name="ExportButton" Content="Export" Style="{StaticResource PrimaryButtonStyle}" Click="OnExportButtonClick" Margin="12,0,0,0" />
-                    <Button DockPanel.Dock="Right" x:Name="OpenButton" Content="Open File" Style="{StaticResource PrimaryButtonStyle}" Click="OnOpenFileClick" />
+                    <Button DockPanel.Dock="Right" x:Name="OpenButton" Content="Open File" Style="{StaticResource PrimaryButtonStyle}" Click="OnOpenFileClick" ToolTip="Open a file (Ctrl+O) — or drop one onto the window" />
+                    <Button DockPanel.Dock="Right" Content="New window" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,8,0"
+                            Click="OnNewWindowClick" ToolTip="Open a second window, for comparing files side by side" />
+                    <Button DockPanel.Dock="Right" x:Name="RecentFilesButton" Content="Recent" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,8,0"
+                            Click="OnRecentFilesButtonClick" IsEnabled="{Binding HasRecentFiles}" ToolTip="Files you opened recently" />
 
                     <Button DockPanel.Dock="Right" Style="{StaticResource ToolbarButtonStyle}" Padding="8" Margin="0,0,12,0"
                             Command="{Binding ToggleThemeCommand}" ToolTip="Toggle light/dark theme"
@@ -141,7 +213,9 @@
                                 <Button Content="Add" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.AddRowCommand}" />
                                 <Button Content="Duplicate" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
                                 <Button Content="Delete" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DeleteSelectedRowsCommand}" />
-                                <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" />
+                                <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" ToolTip="Undo the last edit or row change (Ctrl+Z)" />
+                                <Button Content="Extract" Style="{StaticResource ToolbarButtonStyle}" Click="OnExtractSelectionClick"
+                                        ToolTip="Pull the selected rows into their own view — same file and columns, just those rows, with its own filters and sort" />
                             </StackPanel>
                         </Border>
                         <TextBlock Text="{Binding Grid.SelectedCount, StringFormat='{}{0} selected'}" VerticalAlignment="Center"
@@ -163,32 +237,10 @@
                         <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
-                            </StackPanel>
-                        </Border>
-
-                        <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="12,4" />
-
-                        <Border Background="{DynamicResource CanvasBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="2">
-                            <StackPanel Orientation="Horizontal">
-                                <Grid Width="200" VerticalAlignment="Center">
-                                    <TextBlock Text="Search all columns" Foreground="{DynamicResource TextSecondaryBrush}" Margin="9,0" VerticalAlignment="Center" IsHitTestVisible="False">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Grid.SearchText.Length}" Value="0">
-                                                        <Setter Property="Visibility" Value="Visible" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBox x:Name="SearchTextBox" BorderThickness="0" Background="Transparent"
-                                             Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
-                                             KeyDown="OnSearchTextBoxKeyDown" />
-                                </Grid>
-                                <Button Content="Find" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.ApplySearchCommand}" />
-                                <Button Content="✕" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6" Command="{Binding Grid.ClearSearchCommand}" ToolTip="Clear search" />
+                                <Button Content="Copy" Style="{StaticResource ToolbarButtonStyle}" Click="OnCopyClick"
+                                        ToolTip="Copy the selected rows as tab-separated text (Ctrl+C) — pastes straight into Excel" />
+                                <Button x:Name="FileInfoButton" Content="File info" Style="{StaticResource ToolbarButtonStyle}" Click="OnFileInfoClick"
+                                        ToolTip="Header metadata, section details and any parser warnings for this file" />
                             </StackPanel>
                         </Border>
 
@@ -199,6 +251,132 @@
                             <TextBox Width="34" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" HorizontalContentAlignment="Center" />
                         </StackPanel>
                     </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- ============================== Open files (tabs) ====================== -->
+            <!-- Several files open at once, each with its own rows, edits, sort, filters and column
+                 layout; the grid below always shows whichever tab is active. -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource CanvasBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}">
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="12,6,12,0">
+                    <ItemsControl ItemsSource="{Binding Tabs}" ItemTemplate="{StaticResource FileTabTemplate}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <!-- ============================== Sections (bulk files) ================== -->
+            <!-- Only shown for a file that declares more than one DATA= section. Each section is a
+                 table in its own right (its own columns and rows) and is indexed the first time it
+                 is opened, not when the file is. -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                <DockPanel Margin="16,8">
+                    <TextBlock DockPanel.Dock="Left" Text="SECTIONS" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding ActiveTab.Sections}" ItemTemplate="{StaticResource FileSectionTemplate}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- ============================== Search bar ============================= -->
+            <!-- One term at a time is typed here; "Find" searches with just that term, "+ Add term"
+                 keeps the terms already applied and adds this one. Each term carries its own scope
+                 (all columns, or one), comparison and case sensitivity, and the terms combine with
+                 the match-all/match-any toggle. Every active term shows as a removable chip below.
+
+                 Laid out as a WrapPanel, not a DockPanel: there are enough controls here that at a
+                 normal window width a docked layout squeezed the dropdowns and the text box out of
+                 view entirely. Wrapping puts them on a second line instead of clipping them, and the
+                 widths below are minimums rather than fixed sizes so the row degrades gracefully. -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}">
+                <WrapPanel Orientation="Horizontal" Margin="16,8,16,4">
+                    <TextBlock Text="SEARCH" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,4" />
+
+                    <ComboBox MinWidth="130" MaxWidth="190" VerticalAlignment="Center" Margin="0,0,6,4"
+                              ItemsSource="{Binding Grid.SearchColumns}" SelectedItem="{Binding Grid.SearchColumn}"
+                              ToolTip="Which column this term applies to" AutomationProperties.Name="Search scope" />
+                    <ComboBox MinWidth="125" VerticalAlignment="Center" Margin="0,0,6,4"
+                              ItemsSource="{Binding Grid.SearchModes}" SelectedItem="{Binding Grid.SearchMode}"
+                              ToolTip="How this term is compared" AutomationProperties.Name="Search comparison" />
+
+                    <Grid MinWidth="180" Width="230" VerticalAlignment="Center" Margin="0,0,6,4">
+                        <TextBox x:Name="SearchTextBox"
+                                 Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 KeyDown="OnSearchTextBoxKeyDown" AutomationProperties.Name="Search text" />
+                        <TextBlock Text="Search…  (Ctrl+F)" Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Grid.SearchText.Length}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <Button Style="{StaticResource PrimaryButtonStyle}" Padding="14,6" Margin="0,0,6,4"
+                            Command="{Binding Grid.ApplySearchCommand}" Content="Find"
+                            ToolTip="Search using only this term, replacing any terms already applied" />
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="0,0,6,4"
+                            Command="{Binding Grid.AddSearchTermCommand}" Content="+ Add term"
+                            ToolTip="Keep the terms already applied and add this one as well" />
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="8,6" Margin="0,0,10,4"
+                            Command="{Binding Grid.ClearSearchCommand}" Content="✕" ToolTip="Clear the search" />
+
+                    <CheckBox Content="Case" VerticalAlignment="Center" Margin="0,0,10,4"
+                              IsChecked="{Binding Grid.SearchCaseSensitive}" ToolTip="Match upper/lower case exactly" />
+
+                    <!-- Filter vs highlight: filtering hides what doesn't match, highlighting keeps
+                         every row and marks the matching cells, with ‹ › to step between them. -->
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="0,0,6,4"
+                            Click="OnToggleSearchModeClick" Content="{Binding Grid.SearchModeLabel}"
+                            ToolTip="Switch between hiding rows that don't match and highlighting the ones that do" />
+
+                    <!-- Combine mode: only meaningful once more than one term is applied. -->
+                    <Button x:Name="CombineModeButton" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="0,0,6,4"
+                            Click="OnToggleCombineModeClick" Content="{Binding Grid.SearchCombineLabel}"
+                            ToolTip="Switch between requiring every term to match and requiring any one of them"
+                            Visibility="{Binding Grid.HasMultipleSearchTerms, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
+
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,4"
+                                Visibility="{Binding Grid.HasHighlight, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                        <TextBlock Text="{Binding Grid.MatchLabel}" VerticalAlignment="Center" Margin="4,0,6,0"
+                                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <Button Content="‹" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6"
+                                Command="{Binding Grid.PreviousMatchCommand}" ToolTip="Previous match (Shift+F3)" />
+                        <Button Content="›" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6"
+                                Command="{Binding Grid.NextMatchCommand}" ToolTip="Next match (F3)" />
+                    </StackPanel>
+                </WrapPanel>
+            </Border>
+
+            <!-- Matches the user cannot see: only the first twenty columns show by default, so a
+                 highlight can report hundreds of matches over a screen with nothing marked on it. -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource PaleYellowBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding Grid.HasHiddenMatches, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                <DockPanel Margin="16,6">
+                    <Button DockPanel.Dock="Right" Content="Show them" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12"
+                            Click="OnShowHiddenMatchColumnsClick" />
+                    <TextBlock Text="{Binding Grid.HiddenMatchesLabel}" VerticalAlignment="Center" FontSize="12"
+                               Foreground="{DynamicResource PaleYellowTextBrush}" TextTrimming="CharacterEllipsis" />
                 </DockPanel>
             </Border>
 
@@ -239,32 +417,62 @@
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,10">
                     <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
-                    <ProgressBar Width="220" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                 Minimum="0" Maximum="100"
-                                 Value="{Binding IndexingProgressPercent, Mode=OneWay}"
-                                 Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ProgressBar Width="220" VerticalAlignment="Center" Minimum="0" Maximum="100"
+                                     Value="{Binding IndexingProgressPercent, Mode=OneWay}" />
+                        <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="8,3" FontSize="11" Margin="8,0,0,0"
+                                Command="{Binding CancelIndexingCommand}" ToolTip="Stop opening this file" />
+                    </StackPanel>
                 </Grid>
             </Border>
 
             <!-- ============================== Pagination bar ========================== -->
+            <!-- "Rows per page" goes up to "All rows", which turns paging off entirely: the grid
+                 realizes only the rows on screen and rows are read and decoded only when asked for,
+                 so showing everything is a scroll, not a load. The page buttons hide themselves in
+                 that mode rather than sitting there disabled. -->
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
-                <Grid Margin="16,8">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="{Binding Grid.TotalRowCount, StringFormat='{}{0:N0} record(s)'}"
+                <DockPanel Margin="16,8">
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Grid.RowRangeLabel}"
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
                         <TextBlock Text="Filtering…" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
                                    Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
                                    Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        <Button Content="Stop" Style="{StaticResource ToolbarButtonStyle}" Padding="8,3" FontSize="11" Margin="8,0,0,0"
+                                Click="OnCancelFilterClick" ToolTip="Stop filtering and keep the rows currently shown"
+                                Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="ROWS PER PAGE" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0" />
+                        <ComboBox MinWidth="128" VerticalAlignment="Center"
+                                  ItemsSource="{Binding Grid.PageSizeOptions}" SelectedItem="{Binding Grid.SelectedPageSize}"
+                                  ToolTip="How many rows to show at once. 'All rows' scrolls through the whole result set."
+                                  AutomationProperties.Name="Rows per page" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="{Binding Grid.IsPagingActive, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                        <Button Content="«" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" ToolTip="First page"
+                                Command="{Binding Grid.FirstPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
                         <Button Content="‹ Previous" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.PreviousPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
-                        <TextBlock Text="{Binding Grid.PageLabel}" VerticalAlignment="Center" Margin="12,0"
-                                   FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBox x:Name="PageNumberBox" Width="60" Margin="8,0,0,0" VerticalAlignment="Center"
+                                 HorizontalContentAlignment="Center" Padding="6,5"
+                                 Text="{Binding Grid.PageNumberText, Mode=OneWay}"
+                                 KeyDown="OnPageNumberBoxKeyDown" LostFocus="OnPageNumberBoxLostFocus"
+                                 ToolTip="Type a page number and press Enter" AutomationProperties.Name="Page number" />
+                        <TextBlock Text="{Binding Grid.PageCount, StringFormat='of {0:N0}'}" VerticalAlignment="Center" Margin="8,0,8,0"
+                                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" />
                         <Button Content="Next ›" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.NextPageCommand}" IsEnabled="{Binding Grid.CanGoToNextPage}" />
+                        <Button Content="»" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" ToolTip="Last page"
+                                Command="{Binding Grid.LastPageCommand}" IsEnabled="{Binding Grid.CanGoToNextPage}" />
                     </StackPanel>
-                </Grid>
+                </DockPanel>
             </Border>
 
             <!-- ============================== Grid / welcome screen ==================== -->
@@ -352,7 +560,34 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
-                                <TextBlock Grid.Column="1" Text="Excel-style per-column value filters, plus search across every column"
+                                <TextBlock Grid.Column="1" Text="Search with as many terms as you need — per column or across all of them, with contains/equals/starts-with/regex and match-all or match-any"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Several files open at once as tabs, each with its own edits, sort, filters and column layout"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Bulk files detected automatically — every DATA= section shows as its own table, indexed only when you open it"
+                                           FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="5" Height="5" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,7,10,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="Excel-style per-column value filters, straight from the values actually in the file"
                                            FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,0,0,10">
@@ -414,38 +649,182 @@
             </Border>
         </Popup>
 
-        <!-- ============================== Column value filter (Excel-style) ========= -->
+        <!-- ============================== File info ================================ -->
+        <!-- What the file says about itself, plus anything the parser had to warn about. The
+             warnings used to be a number in the status bar with no way to read them. -->
+        <Popup x:Name="FileInfoPopup" PlacementTarget="{Binding ElementName=FileInfoButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" MaxHeight="520" Width="460" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="FILE INFO" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,10" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <ItemsControl x:Name="FileInfoList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="4,3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}"
+                                                       TextWrapping="Wrap" ToolTip="{Binding Value}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock x:Name="FileDiagnosticsHeading" Text="DIAGNOSTICS" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,14,4,6" Visibility="Collapsed" />
+                            <ItemsControl x:Name="FileDiagnosticsList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource CanvasBrush}" CornerRadius="4" Padding="8,6" Margin="4,0,4,6">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Headline}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                <TextBlock Text="{Binding Message}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Popup>
+
+        <!-- ============================== Recent files ============================= -->
+        <Popup x:Name="RecentFilesPopup" PlacementTarget="{Binding ElementName=RecentFilesButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="8" MaxHeight="420" Width="420" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="RECENT FILES" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,4,8,8" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding RecentFiles}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- File name on top, full path underneath: several exports often share a
+                                         name and differ only by folder or date. -->
+                                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                                            Click="OnRecentFileClick"
+                                            Command="{Binding DataContext.OpenRecentFileCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="{Binding}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Converter={StaticResource FileNameConverter}}" FontSize="12.5" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding}" FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Popup>
+
+        <!-- ============================== Column menu (values / stats) ============= -->
+        <!-- Two views of one column: the Excel-style value picker, and a summary of what the column
+             actually holds — distinct count, blanks, extremes, and the numeric totals when the values
+             are numbers. The summary answers "is this column worth filtering on" before you filter. -->
         <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True" Opened="OnPopupOpened">
-            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="220" MaxHeight="380" Margin="0,4,0,0">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="268" MaxHeight="440" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
                 <DockPanel>
                     <TextBlock x:Name="ColumnFilterTitle" DockPanel.Dock="Top" FontSize="10" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
-                    <TextBox x:Name="ColumnFilterSearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="OnColumnFilterSearchChanged" />
+
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick" />
-                        <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick" />
+                        <Button x:Name="ColumnValuesModeButton" Content="Values" Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="10,4" FontSize="12" Click="OnColumnValuesModeClick" />
+                        <Button x:Name="ColumnStatsModeButton" Content="Stats" Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="10,4" FontSize="12" Click="OnColumnStatsModeClick" />
                     </StackPanel>
-                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                        <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
-                        <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
+
+                    <!-- Sorting and the per-column filter live here rather than on the header itself:
+                         a header click is already how you resize and reorder, and this is where a
+                         user goes looking for what a column can do. -->
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Sort A→Z" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortAscendingClick" />
+                            <Button Content="Sort Z→A" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortDescendingClick" />
+                            <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnClearSortClick"
+                                    ToolTip="Back to file order" />
+                        </StackPanel>
+                        <TextBox x:Name="ColumnPatternBox" Margin="0,0,0,6" KeyDown="OnColumnPatternBoxKeyDown"
+                                 ToolTip="Show only rows whose value in this column matches. Press Enter to apply." />
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox x:Name="ColumnPatternRegexBox" Content="Regex" VerticalAlignment="Center" FontSize="12" />
+                            <Button Content="Apply" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Margin="8,0,0,0" Click="OnColumnPatternApplyClick" />
+                        </StackPanel>
                     </StackPanel>
-                    <!-- Shown from the moment the popup opens until the (background) distinct-value
-                         lookup finishes — the popup is fully open and interactive immediately, it
-                         just doesn't have values to show yet, instead of freezing until it does. -->
-                    <TextBlock x:Name="ColumnFilterLoadingText" DockPanel.Dock="Top" Text="Loading values…" FontSize="12"
-                               FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <ItemsControl x:Name="ColumnFilterValuesList">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
+
+                    <Grid>
+                        <DockPanel x:Name="ColumnValuesPanel">
+                            <TextBox x:Name="ColumnFilterSearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="OnColumnFilterSearchChanged" />
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick" />
+                                <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick" />
+                            </StackPanel>
+                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
+                                <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
+                            </StackPanel>
+                            <!-- Shown from the moment the popup opens until the (background) distinct-value
+                                 lookup finishes — the popup is fully open and interactive immediately, it
+                                 just doesn't have values to show yet, instead of freezing until it does. -->
+                            <TextBlock x:Name="ColumnFilterLoadingText" DockPanel.Dock="Top" Text="Loading values…" FontSize="12"
+                                       FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
+                            <!-- Shown when the column has more distinct values than the lookup collects, so a
+                                 partial list is never presented as the complete set. -->
+                            <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="11"
+                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or the column's filter row."
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ItemsControl x:Name="ColumnFilterValuesList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
+
+                        <DockPanel x:Name="ColumnStatsPanel" Visibility="Collapsed">
+                            <TextBlock x:Name="ColumnStatsLoadingText" DockPanel.Dock="Top" Text="Summarizing column…" FontSize="12"
+                                       FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
+                            <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="10.5" Margin="4,10,4,0"
+                                       Text="Counted over the rows currently in view — filters included."
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ItemsControl x:Name="ColumnStatsList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="4,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" FontWeight="SemiBold"
+                                                           Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="150"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}" ToolTip="{Binding Value}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Grid>
                 </DockPanel>
             </Border>
         </Popup>

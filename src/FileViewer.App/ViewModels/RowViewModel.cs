@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using FileViewer.Core.Caching;
+using FileViewer.Core.Filtering;
 using FileViewer.Core.Overlay;
 using FileViewer.Core.Session;
 
@@ -11,15 +12,50 @@ namespace FileViewer.App.ViewModels;
 /// indexer (bound in XAML as <c>[0]</c>, <c>[1]</c>, ...) so a fixed, compile-time-unknown set of
 /// DIF columns can still be edited in place through ordinary two-way `DataGridTextColumn` bindings.
 /// </summary>
-public sealed class RowViewModel(FileViewerSession session, long rowIndex, RowSelectionState selection) : INotifyPropertyChanged
+public sealed class RowViewModel(
+    FileViewerSession session,
+    long rowIndex,
+    RowSelectionState selection,
+    CompiledSearchQuery? highlight = null) : INotifyPropertyChanged
 {
     private static readonly ResolvedRow EmptyRow = new(0, [], RowRenderState.Normal);
 
     private ResolvedRow? _resolved;
+    private CellMatchView? _cellMatch;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public long RowIndex => rowIndex;
+
+    /// <summary>
+    /// Drops this row's resolved values and tells its bindings to re-read them — used after the row
+    /// was edited somewhere else (the record dialog edits its own wrapper for the same row).
+    /// </summary>
+    public void Refresh()
+    {
+        _resolved = null;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(System.Windows.Data.Binding.IndexerName));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RenderState)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CellMatch)));
+    }
+
+    /// <summary>Tells the row's checkbox to re-read <see cref="IsSelected"/> after a bulk selection change.</summary>
+    public void RefreshSelection() =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
+
+    /// <summary>Whether this row was resolved against <paramref name="other"/> — how the grid rejects a row that belongs to a different tab (see <see cref="GridViewModel.SelectedRow"/>).</summary>
+    public bool BelongsTo(FileViewerSession other) => ReferenceEquals(session, other);
+
+    /// <summary>
+    /// Two wrappers for the same row of the same file are the same row. Identity has to survive the
+    /// instance being rebuilt, because these are created on demand and dropped whenever the visible
+    /// window moves — with reference equality, scrolling far enough would silently lose the
+    /// selection and leave the grid unable to find the row it had selected.
+    /// </summary>
+    public override bool Equals(object? obj) =>
+        obj is RowViewModel other && other.RowIndex == rowIndex && other.BelongsTo(session);
+
+    public override int GetHashCode() => HashCode.Combine(rowIndex, session);
 
     /// <summary>Whether this row is checked for bulk actions — backed by <see cref="RowSelectionState"/>, not this (short-lived, per-page) instance, so the check survives paging.</summary>
     public bool IsSelected
@@ -54,6 +90,30 @@ public sealed class RowViewModel(FileViewerSession session, long rowIndex, RowSe
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(System.Windows.Data.Binding.IndexerName));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RenderState)));
         }
+    }
+
+    /// <summary>
+    /// Per-cell search-match flags, bound from XAML as <c>CellMatch[0]</c>, <c>CellMatch[1]</c>, …
+    /// (each data column's cell style triggers its highlight off its own index). Exposed through a
+    /// tiny view object because C# has no way to give a type a second, differently-named indexer
+    /// alongside the value one.
+    /// </summary>
+    public CellMatchView CellMatch => _cellMatch ??= new CellMatchView(this);
+
+    private bool IsCellMatch(int columnIndex)
+    {
+        if (highlight is null || highlight.IsEmpty) return false;
+
+        IReadOnlyList<string> fields = Resolved.FieldValues;
+        return columnIndex >= 0
+            && columnIndex < fields.Count
+            && highlight.HighlightsCell(columnIndex, fields[columnIndex]);
+    }
+
+    /// <summary>Indexer view over <see cref="RowViewModel"/>'s per-cell match flags — see <see cref="CellMatch"/>.</summary>
+    public sealed class CellMatchView(RowViewModel row)
+    {
+        public bool this[int columnIndex] => row.IsCellMatch(columnIndex);
     }
 
     /// <summary>Every column name paired with this row's current value — backs the "View record" detail dialog.</summary>

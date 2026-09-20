@@ -3,8 +3,8 @@ using System.Collections.Specialized;
 using FileViewer.App.ViewModels;
 using FileViewer.Core.Filtering;
 using FileViewer.Core.Native;
-using FileViewer.Core.Overlay;
 using FileViewer.Core.Session;
+using FileViewer.Core.Statistics;
 
 namespace FileViewer.App.Collections;
 
@@ -29,43 +29,97 @@ namespace FileViewer.App.Collections;
 /// paging) is tracked separately in <see cref="ViewModels.RowSelectionState"/>, not here — see its
 /// doc comment for why that has to live outside any single page of <see cref="RowViewModel"/>s.
 ///
-/// Filtering decodes every candidate row (PRS §8's acknowledged slow path — there's no
-/// pre-extracted key for anything but "_ID"), so every filter-mutating entry point here is async:
-/// it computes the new effective order on a background thread via <see cref="Task.Run(Action)"/>
-/// and only touches UI-bound state once that's done. WPF's DataGrid/IList contract is inherently
-/// synchronous (no async IList), so the *result* still has to land back on the calling thread —
-/// what's backgrounded is the row-decoding work, not the final assignment. Doing this synchronously
-/// on the UI thread (the previous design) is what caused clicks to go missing: the thread would
-/// freeze for however long the decode loop took, and any input that arrived during that freeze was
-/// either dropped or landed on a control that had since moved/changed. <see cref="ViewModels.GridViewModel.IsBusy"/>
-/// is the other half of the fix — it's what stops a second filter operation (or an edit that would
-/// race with <see cref="Overlay.EditOverlay"/>/<see cref="Caching.DecodedRowCache"/> reads the
-/// background computation is doing) from starting while one is already in flight.
+/// Filtering decodes candidate rows (PRS §8's acknowledged slow path — there's no pre-extracted key
+/// for anything but "_ID"), so every filter-mutating entry point here is async: all active filters
+/// are compiled into one <see cref="RowPredicateSet"/> and run as a single parallel pass
+/// (<see cref="RowQueryEngine"/>) on a background thread, and only the finished result touches
+/// UI-bound state. WPF's DataGrid/IList contract is inherently synchronous (no async IList), so the
+/// *result* still has to land back on the calling thread — what's backgrounded is the row-decoding
+/// work, not the final assignment. Doing this synchronously on the UI thread (the original design)
+/// is what caused clicks to go missing: the thread would freeze for however long the decode loop
+/// took, and any input that arrived during that freeze was either dropped or landed on a control
+/// that had since moved/changed.
+///
+/// A recompute in flight is cancellable, and is cancelled when it is superseded or when
+/// <see cref="Dispose"/> runs. The second is what matters most in practice: closing a tab (or the
+/// window) while a filter is scanning a multi-gigabyte file stops that scan then and there, instead
+/// of leaving it to finish a computation whose result nothing will ever read.
 /// </summary>
-public sealed class VirtualizingRowCollection(FileViewerSession session, RowSelectionState selection) : IList, INotifyCollectionChanged
+public sealed class VirtualizingRowCollection(
+    FileViewerSession session,
+    RowSelectionState selection,
+    IReadOnlyList<long>? restrictedRows = null) : IList, INotifyCollectionChanged, IDisposable
 {
     /// <summary>Rows-per-page before MainWindow has had a chance to measure the DataGrid's actual visible height and call <see cref="SetPageSize"/> — a starting point now, not a hard limit.</summary>
     public const int DefaultPageSize = 20;
 
     private long[]? _effectiveOrder;
-    private string? _filterText;
+    private SearchQuery _searchQuery = SearchQuery.Empty;
     private long[]? _customOrderOverride;
     private int _pageIndex;
-    private int _pageSize = DefaultPageSize;
+    private int? _pageSize = DefaultPageSize;
     private readonly Dictionary<string, HashSet<string>> _columnValueFilters = new();
     private readonly Dictionary<string, ColumnPatternFilter> _columnPatternFilters = new();
 
+    /// <summary>
+    /// The <see cref="RowViewModel"/>s handed to the grid for the page currently on screen, reused
+    /// until the page changes. The DataGrid re-queries an index several times while measuring,
+    /// rendering and re-templating a row; without this each of those queries produced a fresh view
+    /// model that had to resolve (and therefore decode) the row all over again.
+    /// </summary>
+    private readonly Dictionary<long, RowViewModel> _pageRowCache = new();
+
+    /// <summary>Ceiling on <see cref="_pageRowCache"/>. Comfortably more than any screenful, small enough that scrolling a multi-million-row page can't grow it without bound.</summary>
+    private const int MaxCachedRowViewModels = 4096;
+
+    private CancellationTokenSource? _recomputeCts;
+
+    private SearchQuery _highlightQuery = SearchQuery.Empty;
+    private CompiledSearchQuery _compiledHighlight = CompiledSearchQuery.Empty;
+    private int[] _matchPositions = [];
+
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
-    private long[] EffectiveOrder => _effectiveOrder ??= [.. BuildCandidates(excludingColumn: null)];
+    private long[] EffectiveOrder => _effectiveOrder ??= [.. BuildCandidates(excludingColumn: null, CancellationToken.None)];
 
     public int TotalRowCount => EffectiveOrder.Length;
     public int PageIndex => _pageIndex;
-    public int PageSize => _pageSize;
+    /// <summary>
+    /// Rows exposed at once. Null means "no paging" — every row that passed the filters is on one
+    /// page, and WPF's own row virtualization does the work: it realizes only the rows on screen and
+    /// this collection only ever resolves (and therefore reads and decodes) the ones it is asked
+    /// for. That is what makes "All rows" over a multi-million-row file a scroll rather than a load.
+    /// </summary>
+    public int PageSize => _pageSize ?? Math.Max(1, EffectiveOrder.Length);
+
+    /// <summary>True when every row is on one page — see <see cref="PageSize"/>.</summary>
+    public bool ShowsAllRows => _pageSize is null;
+
     public int PageCount => Math.Max(1, (int)Math.Ceiling(EffectiveOrder.Length / (double)PageSize));
 
-    /// <summary>The active search-box text, or null/empty if none — for the "what am I filtering by" summary.</summary>
-    public string? CurrentSearchText => _filterText;
+    /// <summary>1-based number of the first row on the current page, for the "showing 51–100 of N" label. 0 when there are no rows.</summary>
+    public int FirstRowNumberOnPage => EffectiveOrder.Length == 0 ? 0 : (_pageIndex * PageSize) + 1;
+
+    /// <summary>1-based number of the last row on the current page.</summary>
+    public int LastRowNumberOnPage => (_pageIndex * PageSize) + Count;
+
+    /// <summary>The main search's current (possibly multi-term) query — for the "what am I filtering by" summary.</summary>
+    public SearchQuery CurrentSearchQuery => _searchQuery;
+
+    /// <summary>
+    /// The query being highlighted rather than filtered by. Highlight mode answers "where is it"
+    /// instead of "show me only those": every row stays visible and the matching cells are marked,
+    /// which is what you want when the surrounding rows are the context you're reading.
+    /// </summary>
+    public SearchQuery CurrentHighlightQuery => _highlightQuery;
+
+    /// <summary>The compiled form of <see cref="CurrentHighlightQuery"/>, handed to each row so a cell can test itself.</summary>
+    public CompiledSearchQuery CompiledHighlight => _compiledHighlight;
+
+    /// <summary>Positions within the current row order that match the highlight query, ascending — what next/previous match navigation steps through.</summary>
+    public IReadOnlyList<int> MatchPositions => _matchPositions;
+
+    public bool HasHighlight => !_highlightQuery.IsEmpty;
 
     /// <summary>Every column with an active Excel-style value filter, and the value set it's restricted to — for the "what am I filtering by" summary.</summary>
     public IReadOnlyDictionary<string, HashSet<string>> ColumnValueFilters => _columnValueFilters;
@@ -74,64 +128,67 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     public IReadOnlyDictionary<string, ColumnPatternFilter> ColumnPatternFilters => _columnPatternFilters;
 
     /// <summary>
-    /// Builds the current candidate row list: base/added rows, minus deleted, minus the search
-    /// filter, minus every active per-column value filter except <paramref name="excludingColumn"/>,
-    /// minus every active per-column pattern filter. Excluding one column's own value filter is
-    /// what lets its value-picker popup still offer that column's full available value set
-    /// (relative to every OTHER active filter) rather than only the values that survive its own
-    /// current selection — the same "what could I pick instead" behavior Excel's column filter
-    /// menus have. Runs entirely off plain fields/session state with no WPF dependency, so it's
-    /// safe to call from a background thread (see the class remarks).
+    /// Builds the current candidate row list: base/added rows, minus deleted, minus everything the
+    /// active filters reject — all of it in a single pass (see <see cref="RowPredicateSet"/>).
+    /// <paramref name="excludingColumn"/> leaves out one column's own value filter, which is what
+    /// lets its value-picker popup still offer that column's full available value set (relative to
+    /// every OTHER active filter) rather than only the values that survive its own current
+    /// selection — the same "what could I pick instead" behavior Excel's column filter menus have.
+    /// Runs entirely off plain fields/session state with no WPF dependency, so it's safe to call
+    /// from a background thread (see the class remarks).
     /// </summary>
-    private List<long> BuildCandidates(string? excludingColumn)
+    private List<long> BuildCandidates(string? excludingColumn, CancellationToken cancellationToken)
     {
-        IEnumerable<long> candidates;
+        List<long> candidates = BuildBaseOrder();
+
+        IReadOnlyDictionary<string, HashSet<string>> valueFilters = _columnValueFilters;
+        if (excludingColumn is not null && _columnValueFilters.ContainsKey(excludingColumn))
+        {
+            var withoutColumn = new Dictionary<string, HashSet<string>>(_columnValueFilters, StringComparer.Ordinal);
+            withoutColumn.Remove(excludingColumn);
+            valueFilters = withoutColumn;
+        }
+
+        RowPredicateSet predicates = RowPredicateSet.Compile(
+            _searchQuery, valueFilters, _columnPatternFilters, session.FileIndex.Header);
+
+        return RowQueryEngine.Filter(candidates, predicates, session.FileIndex, session.Overlay, session.Cache, cancellationToken);
+    }
+
+    /// <summary>
+    /// The rows this view starts from, before any filter or search — normally the whole section,
+    /// but a fixed set for an extracted view (see <see cref="ViewModels.GridViewModel.IsExtractedView"/>).
+    /// Public so the sort path can work from the same starting point rather than re-deriving it from
+    /// the session and quietly pulling in rows this view never contained.
+    /// </summary>
+    public IReadOnlyList<long> GetBaseRowOrder() => BuildBaseOrder();
+
+    private List<long> BuildBaseOrder()
+    {
+        if (restrictedRows is not null)
+        {
+            // An extracted view is exactly these rows. Added/duplicated rows belong to whichever
+            // view created them, so they are not pulled in here.
+            return [.. _customOrderOverride ?? [.. restrictedRows]];
+        }
+
         if (_customOrderOverride is not null)
         {
             // A generic (non-"_ID") column-header sort was applied — it already reflects the full
             // base+added row set as of when it ran (see GridViewModel.SortByColumnAsync). Rows added
             // afterward won't appear here until the sort is reapplied or cleared; that's an
             // accepted limitation of this "arbitrary column" slow path, not a bug.
-            candidates = _customOrderOverride;
-        }
-        else
-        {
-            var order = new List<long>();
-            UnmanagedArray<SortKey> current = session.CurrentOrder;
-            for (nuint i = 0; i < current.Count; i++)
-            {
-                order.Add(current[i].RowIndex);
-            }
-            order.AddRange(session.Overlay.GetLiveAddedOrDuplicatedRowIndices());
-            candidates = order;
+            return [.. _customOrderOverride];
         }
 
-        var result = new List<long>();
-        foreach (long rowIndex in candidates)
+        UnmanagedArray<SortKey> current = session.CurrentOrder;
+        var order = new List<long>(checked((int)current.Count) + 8);
+        for (nuint i = 0; i < current.Count; i++)
         {
-            if (session.Overlay.GetRowState(rowIndex) != RowState.Deleted)
-            {
-                result.Add(rowIndex);
-            }
+            order.Add(current[i].RowIndex);
         }
-
-        if (!string.IsNullOrEmpty(_filterText))
-        {
-            result = RowFilter.Filter(result, _filterText, session.FileIndex, session.Overlay, session.Cache);
-        }
-
-        foreach ((string columnName, HashSet<string> allowedValues) in _columnValueFilters)
-        {
-            if (columnName == excludingColumn) continue;
-            result = RowFilter.FilterByColumnValues(result, columnName, allowedValues, session.FileIndex, session.Overlay, session.Cache);
-        }
-
-        foreach ((string columnName, ColumnPatternFilter filter) in _columnPatternFilters)
-        {
-            result = RowFilter.FilterByColumnPattern(result, columnName, filter.Pattern, filter.UseRegex, session.FileIndex, session.Overlay, session.Cache);
-        }
-
-        return result;
+        order.AddRange(session.Overlay.GetLiveAddedOrDuplicatedRowIndices());
+        return order;
     }
 
     /// <summary>Recomputes which rows are visible and in what order (synchronously, off whatever filters/sort are already set), resets to the first page, and notifies the grid to re-query everything. Cheap when no filter is active (just copies sort-key row indices); use the async filter-mutating methods below when a filter itself is what's changing, so that decode work never blocks the caller.</summary>
@@ -139,17 +196,37 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     {
         _effectiveOrder = null;
         _pageIndex = 0;
-        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        RaiseReset();
     }
 
     /// <summary>
-    /// Forces the grid to re-query every row on the current page (fresh <see cref="RowViewModel"/>
-    /// instances) without touching the effective order, page index, or scroll position — used
-    /// after a bulk selection change (select all / clear all) so on-screen checkboxes reflect it
-    /// immediately, without the page-reset side effect <see cref="Invalidate"/> would cause.
+    /// Tells the rows currently on screen to re-read their selection state, after a bulk change
+    /// (select all / clear all) that the individual checkbox bindings wouldn't hear about.
+    ///
+    /// Deliberately not a collection reset: resetting makes the grid throw away and regenerate every
+    /// container, which also throws away the scroll position. That was survivable when a page was
+    /// twenty rows; with every row on one page it would fling the user back to the top of the file
+    /// for something as small as ticking a box.
     /// </summary>
-    public void RefreshCurrentPage() =>
-        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+    public void RefreshSelectionVisuals()
+    {
+        foreach (RowViewModel row in _pageRowCache.Values)
+        {
+            row.RefreshSelection();
+        }
+    }
+
+    /// <summary>
+    /// Re-reads one row after it was edited through something other than the grid (the record
+    /// dialog), leaving the scroll position and everything else alone.
+    /// </summary>
+    public void RefreshRow(long rowIndex)
+    {
+        if (_pageRowCache.TryGetValue(rowIndex, out RowViewModel? row))
+        {
+            row.Refresh();
+        }
+    }
 
     /// <summary>Moves to a different page of the *current* effective order without recomputing it.</summary>
     public void GoToPage(int pageIndex)
@@ -157,31 +234,88 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         int clamped = Math.Clamp(pageIndex, 0, PageCount - 1);
         if (clamped == _pageIndex) return;
         _pageIndex = clamped;
-        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        RaiseReset();
     }
 
     /// <summary>
-    /// Changes how many rows one page holds — driven by MainWindow measuring how many rows actually
-    /// fit in the DataGrid's current visible height, so a page fills the available screen space
-    /// instead of being pinned to a fixed row count. Keeps the current page index valid against the
-    /// new page count but otherwise leaves the effective order/scroll target alone — resizing the
-    /// window shouldn't discard an active filter or sort, or jump back to page 0.
+    /// Changes how many rows one page holds — either a fixed count, a count MainWindow measured from
+    /// the DataGrid's visible height, or null for "every row on one page". Keeps the current page
+    /// index valid against the new page count but otherwise leaves the effective order alone:
+    /// resizing the window, or asking for more rows, shouldn't discard an active filter or sort.
     /// </summary>
-    public void SetPageSize(int pageSize)
+    public void SetPageSize(int? pageSize)
     {
-        int clamped = Math.Max(1, pageSize);
+        int? clamped = pageSize is int rows ? Math.Max(1, rows) : null;
         if (clamped == _pageSize) return;
 
+        // Keep the first row of the current page in view across the change, rather than jumping to
+        // a page number that means something different now. Going to "all rows" starts at the top.
+        int firstVisibleRow = _pageIndex * PageSize;
+
         _pageSize = clamped;
-        _pageIndex = Math.Clamp(_pageIndex, 0, PageCount - 1);
-        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        _pageIndex = clamped is int newSize ? Math.Clamp(firstVisibleRow / newSize, 0, PageCount - 1) : 0;
+
+        // A decoded-row cache smaller than the page means scrolling within one page evicts rows that
+        // are still on screen, and every re-render re-reads and re-decodes them. Ask for room for a
+        // page and a bit; the cache caps the request itself.
+        session.Cache.EnsureCapacity(PageSize + (PageSize / 2));
+
+        RaiseReset();
     }
 
-    /// <summary>Sets (or clears, via null/empty) the arbitrary-column substring filter. Decodes every candidate row on a background thread — see the class remarks.</summary>
-    public async Task ApplyFilterAsync(string? filterText)
+    /// <summary>Sets (or clears, via <see cref="SearchQuery.Empty"/>) the main search — one or many terms. Decodes candidate rows on a background thread; see the class remarks.</summary>
+    public async Task ApplySearchAsync(SearchQuery query)
     {
-        _filterText = filterText;
+        _searchQuery = query;
         await RecomputeAndInstallAsync();
+    }
+
+    /// <summary>
+    /// Sets (or clears) the highlight query. Unlike <see cref="ApplySearchAsync"/> this leaves the
+    /// row order alone — it only works out which rows match, so the view can mark them and step
+    /// between them. The scan still happens on a background thread, since finding the matches costs
+    /// what filtering by the same terms would.
+    /// </summary>
+    public async Task ApplyHighlightAsync(SearchQuery query)
+    {
+        _highlightQuery = query;
+        _compiledHighlight = CompiledSearchQuery.Compile(query, session.FileIndex.Header);
+        await RecomputeMatchesAsync();
+    }
+
+    private async Task RecomputeMatchesAsync()
+    {
+        _pageRowCache.Clear(); // the cached rows carry the old compiled query
+
+        if (_highlightQuery.IsEmpty)
+        {
+            _matchPositions = [];
+            RaiseReset();
+            return;
+        }
+
+        long[] order = EffectiveOrder;
+        RowPredicateSet predicates = RowPredicateSet.Compile(_highlightQuery, null, null, session.FileIndex.Header);
+
+        int[] positions = await Task.Run(() =>
+        {
+            List<long> matched = RowQueryEngine.Filter(order, predicates, session.FileIndex, session.Overlay, session.Cache);
+
+            // The engine preserves input order, so walking both lists together turns matched row
+            // indices into their positions in the view without a lookup table.
+            var result = new List<int>(matched.Count);
+            int position = 0;
+            foreach (long rowIndex in matched)
+            {
+                while (position < order.Length && order[position] != rowIndex) position++;
+                if (position >= order.Length) break;
+                result.Add(position++);
+            }
+            return result.ToArray();
+        });
+
+        _matchPositions = positions;
+        RaiseReset();
     }
 
     /// <summary>Overrides the base-row order with a precomputed sort (used for clicking a non-"_ID" column header — see <see cref="ViewModels.GridViewModel.SortByColumnAsync"/>). The sort itself is already computed by the caller; installing it here is cheap, so this stays synchronous.</summary>
@@ -198,18 +332,51 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         Invalidate();
     }
 
+    /// <summary>
+    /// The row view model at an absolute position in the current row order, or null if that position
+    /// isn't on the page currently exposed. Used by match navigation, which turns to the right page
+    /// first and then asks for the row so it can be selected.
+    /// </summary>
+    public RowViewModel? GetRowAtPosition(int position)
+    {
+        long offset = position - (_pageIndex * (long)PageSize);
+        return offset >= 0 && offset < Count ? RowAtPageOffset((int)offset) : null;
+    }
+
+    /// <summary>The row index at an absolute position in the current row order, or null if that position is out of range.</summary>
+    public long? GetRowIndexAtPosition(int position)
+    {
+        long[] order = EffectiveOrder;
+        return position >= 0 && position < order.Length ? order[position] : null;
+    }
+
     /// <summary>Every row index currently matching the active search/column filters, across every page — the full set "select all" should act on, not just the page currently on screen.</summary>
     public IReadOnlyList<long> GetAllRowIndices() => EffectiveOrder;
 
     /// <summary>
     /// Every distinct value <paramref name="columnName"/> takes among rows passing every OTHER
     /// active filter — the value list an Excel-style filter popup for that column should offer.
-    /// Decodes every candidate row on a background thread; the caller should keep the popup showing
-    /// a loading state (or simply not open it yet) until this completes, rather than populating it
-    /// with a partial/stale list synchronously.
+    /// Decodes candidate rows on a background thread; the caller should keep the popup showing a
+    /// loading state (or simply not open it yet) until this completes, rather than populating it
+    /// with a partial/stale list synchronously. The result says whether it stopped at its cap, so
+    /// the popup can say so instead of silently presenting a partial list as complete.
     /// </summary>
-    public Task<List<string>> GetDistinctValuesForColumnAsync(string columnName) =>
-        Task.Run(() => RowFilter.GetDistinctValues(BuildCandidates(excludingColumn: columnName), columnName, session.FileIndex, session.Overlay, session.Cache));
+    public Task<DistinctValueResult> GetDistinctValuesForColumnAsync(string columnName) =>
+        Task.Run(() => RowQueryEngine.GetDistinctValues(
+            BuildCandidates(excludingColumn: columnName, CancellationToken.None),
+            columnName, session.FileIndex, session.Overlay, session.Cache));
+
+    /// <summary>
+    /// Summarizes one column over the rows currently in view — counts, distinct values, extremes and
+    /// (where the values are numbers) the numeric totals. Computed on a background thread over a
+    /// snapshot of the current row order, like every other whole-column pass here.
+    /// </summary>
+    public Task<ColumnStatistics> GetColumnStatisticsAsync(string columnName)
+    {
+        long[] order = EffectiveOrder;
+        return Task.Run(() => ColumnStatisticsCalculator.Compute(
+            order, columnName, session.FileIndex, session.Overlay, session.Cache));
+    }
 
     /// <summary>The currently-selected value set for a column's filter, or null if no filter is active on it.</summary>
     public HashSet<string>? GetColumnValueFilter(string columnName) =>
@@ -240,9 +407,9 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     /// ag-Grid-style "floating filter row" directly under the column headers, one box per column,
     /// applied together (AND) with the search box and any Excel-style value filters. Background-
     /// recomputes the effective order — see the class remarks. An invalid regex pattern is accepted
-    /// here (it simply matches nothing until corrected — see <see cref="RowFilter.FilterByColumnPattern"/>);
-    /// callers driving live-as-you-type validation should call <see cref="RowFilter.TryCompileRegex"/>
-    /// themselves to flag the input red instead of silently returning zero rows.
+    /// here (it simply matches nothing until corrected); callers driving live-as-you-type validation
+    /// should call <see cref="RowFilter.TryCompileRegex"/> themselves to flag the input red instead
+    /// of silently returning zero rows.
     /// </summary>
     public async Task SetColumnPatternFilterAsync(string columnName, string? pattern, bool useRegex)
     {
@@ -260,7 +427,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     /// <summary>Clears every active filter (search, column value filters, column pattern filters) in one step — the "what am I filtering by" summary's "Clear all" action.</summary>
     public async Task ClearAllFiltersAsync()
     {
-        _filterText = null;
+        _searchQuery = SearchQuery.Empty;
         _columnValueFilters.Clear();
         _columnPatternFilters.Clear();
         await RecomputeAndInstallAsync();
@@ -268,19 +435,73 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
 
     private async Task RecomputeAndInstallAsync()
     {
-        long[] computed = await Task.Run(() => (long[])[.. BuildCandidates(excludingColumn: null)]);
-        _effectiveOrder = computed;
-        _pageIndex = 0;
+        // Any pass already running can only produce a result for filters that no longer apply —
+        // signal it to stop rather than letting it finish and then discarding its work. Each call
+        // disposes its own token source in its own finally, once its await has returned and nothing
+        // is using the token any more.
+        CancellationTokenSource? previous = _recomputeCts;
+        var cts = new CancellationTokenSource();
+        _recomputeCts = cts;
+        previous?.Cancel();
+
+        try
+        {
+            long[] computed = await Task.Run(() => (long[])[.. BuildCandidates(excludingColumn: null, cts.Token)], cts.Token);
+            if (cts.IsCancellationRequested) return;
+
+            _effectiveOrder = computed;
+            _pageIndex = 0;
+            RaiseReset();
+
+            // Match positions refer to the row order, so a new order means they have to be found
+            // again (a filter change never silently leaves stale highlights behind).
+            if (!_highlightQuery.IsEmpty) await RecomputeMatchesAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded, or the file/section was closed while this was computing.
+        }
+        finally
+        {
+            if (ReferenceEquals(_recomputeCts, cts)) _recomputeCts = null;
+            cts.Dispose();
+        }
+    }
+
+    private void RaiseReset()
+    {
+        _pageRowCache.Clear();
         CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
 
-    private long RowIndexAtPageOffset(int pageOffset) => EffectiveOrder[_pageIndex * PageSize + pageOffset];
+    private long RowIndexAtPageOffset(int pageOffset) => EffectiveOrder[checked((_pageIndex * (long)PageSize) + pageOffset)];
 
-    public int Count => Math.Min(PageSize, Math.Max(0, EffectiveOrder.Length - _pageIndex * PageSize));
+    private RowViewModel RowAtPageOffset(int pageOffset)
+    {
+        long rowIndex = RowIndexAtPageOffset(pageOffset);
+        if (_pageRowCache.TryGetValue(rowIndex, out RowViewModel? existing))
+        {
+            return existing;
+        }
+
+        // With paging this only ever holds one page; with every row on one page it would otherwise
+        // grow for as long as the user keeps scrolling, so it is capped. Dropping it wholesale is
+        // fine — the entries are a scroll-time convenience, not state.
+        if (_pageRowCache.Count >= MaxCachedRowViewModels)
+        {
+            _pageRowCache.Clear();
+        }
+
+        var row = new RowViewModel(session, rowIndex, selection, _compiledHighlight);
+        _pageRowCache[rowIndex] = row;
+        return row;
+    }
+
+    public int Count => (int)Math.Min(PageSize, Math.Max(0, EffectiveOrder.Length - (_pageIndex * (long)PageSize)));
 
     public object? this[int index]
     {
-        get => new RowViewModel(session, RowIndexAtPageOffset(index), selection);
+        get => RowAtPageOffset(index);
         set => throw new NotSupportedException();
     }
 
@@ -294,7 +515,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         int count = Count;
         for (int i = 0; i < count; i++)
         {
-            yield return new RowViewModel(session, RowIndexAtPageOffset(i), selection);
+            yield return RowAtPageOffset(i);
         }
     }
 
@@ -319,8 +540,25 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         int count = Count;
         for (int i = 0; i < count; i++)
         {
-            array.SetValue(new RowViewModel(session, RowIndexAtPageOffset(i), selection), index + i);
+            array.SetValue(RowAtPageOffset(i), index + i);
         }
+    }
+
+    /// <summary>
+    /// Stops a filter pass that is still running, leaving the current rows in place. Bound to the
+    /// "Stop" next to the filtering indicator: on a multi-gigabyte file a filter can take seconds,
+    /// and being unable to change your mind is what makes that feel like a hang.
+    /// </summary>
+    public void CancelPendingRecompute() => _recomputeCts?.Cancel();
+
+    /// <summary>Stops any filter pass still running (the tab or window is going away) and drops the page's row view models.</summary>
+    public void Dispose()
+    {
+        // Not disposed here: the call that created it disposes it in its own finally, once its
+        // await has returned.
+        _recomputeCts?.Cancel();
+        _recomputeCts = null;
+        _pageRowCache.Clear();
     }
 
     int IList.Add(object? value) => throw new NotSupportedException();
@@ -329,6 +567,3 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     void IList.Remove(object? value) => throw new NotSupportedException();
     void IList.RemoveAt(int index) => throw new NotSupportedException();
 }
-
-/// <summary>A single column's ag-Grid-style filter-row entry: the raw text the user typed, and whether it should be interpreted as a regex (vs. a plain case-insensitive substring).</summary>
-public readonly record struct ColumnPatternFilter(string Pattern, bool UseRegex);

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FileViewer.Core\FileViewer.Core.csproj" />
+    <ProjectReference Include="..\FileViewer.App.Model\FileViewer.App.Model.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

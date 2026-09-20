@@ -20,24 +20,62 @@ public sealed class DifExporter(FileIndex sourceFileIndex) : IRowExporter
     public void Begin(Stream stream, IReadOnlyList<string> columnNames)
     {
         _stream = stream;
-        sourceFileIndex.CopyRangeTo(stream, 0, sourceFileIndex.Header.DataStartOffset);
+        DifFileHeader header = sourceFileIndex.Header;
+
+        if (header.IsMultiSection)
+        {
+            // Exporting one section of a bulk file produces an ordinary single-section DIF: the
+            // file-level preamble, then this section's own block (its DATA= attribute and field
+            // list), skipping every other section's block and data entirely.
+            long preambleEnd = sourceFileIndex.Layout.Sections[0].BlockStartOffset;
+            sourceFileIndex.CopyRangeTo(stream, 0, preambleEnd);
+            sourceFileIndex.CopyRangeTo(stream, header.SectionBlockStartOffset, header.DataStartOffset - header.SectionBlockStartOffset);
+        }
+        else
+        {
+            sourceFileIndex.CopyRangeTo(stream, 0, header.DataStartOffset);
+        }
+
         _writer = new StreamWriter(stream, DifFormatOptions.TextEncoding, leaveOpen: true) { NewLine = "\n" };
     }
 
     public void WriteRow(ResolvedRow row)
     {
-        _writer!.WriteLine(string.Join(sourceFileIndex.Header.Delimiter, row.FieldValues));
+        // Field by field rather than string.Join: joining allocates a whole row's worth of string
+        // per row, and an export of a few million rows is exactly where that shows up.
+        char delimiter = sourceFileIndex.Header.Delimiter;
+        IReadOnlyList<string> fields = row.FieldValues;
+        for (int i = 0; i < fields.Count; i++)
+        {
+            if (i > 0) _writer!.Write(delimiter);
+            _writer!.Write(fields[i]);
+        }
+        _writer!.WriteLine();
     }
 
     public void End()
     {
+        DifFileHeader header = sourceFileIndex.Header;
+
+        if (header.IsMultiSection)
+        {
+            // The source bytes between this section's END-OF-DATA and the file trailer belong to
+            // other sections, so the closing marker is the one thing here that is written rather
+            // than copied; the trailer itself still comes straight from the file.
+            _writer!.WriteLine(DifFormatOptions.DataEnd);
+            _writer.Flush();
+            long bulkTrailerStart = sourceFileIndex.Layout.TrailerStartOffset;
+            sourceFileIndex.CopyRangeTo(_stream!, bulkTrailerStart, sourceFileIndex.FileLength - bulkTrailerStart);
+            return;
+        }
+
         _writer!.Flush();
 
         // DataEndOffsetExclusive points at the start of the END-OF-DATA line itself, so this one
         // copy carries END-OF-DATA, all trailer metadata (DATARECORDS included, even if it no
         // longer matches the row count after edits — untouched on purpose, per product decision),
         // any END-OF-FILE line, and the closing INATRL/IMATRL marker through to end of file.
-        long trailerStart = sourceFileIndex.Header.DataEndOffsetExclusive;
+        long trailerStart = header.DataEndOffsetExclusive;
         sourceFileIndex.CopyRangeTo(_stream!, trailerStart, sourceFileIndex.FileLength - trailerStart);
     }
 
