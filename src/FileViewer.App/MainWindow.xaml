@@ -11,7 +11,18 @@
         FontFamily="{DynamicResource UiFontFamily}"
         FontSize="13"
         AllowDrop="True" Drop="OnWindowDrop" DragOver="OnWindowDragOver"
-        PreviewKeyDown="OnWindowPreviewKeyDown">
+        PreviewKeyDown="OnWindowPreviewKeyDown"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="Auto">
+        <!-- TextFormattingMode="Display" pixel-snaps glyphs to the device grid instead of WPF's
+             default "Ideal" mode, which positions text at sub-pixel offsets optimized for smooth
+             scaling/animation rather than static readability — the classic cause of WPF text
+             looking soft next to a native Win32 app at the same size. UseLayoutRounding snaps
+             element edges (borders, icons, the grid lines) to whole device pixels for the same
+             reason. Both are attached properties that inherit to every descendant, so setting them
+             once here covers the whole window. -->
+
     <Window.Resources>
         <sysconv:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <local:FileNameConverter x:Key="FileNameConverter" />
@@ -836,7 +847,13 @@
              actually holds — distinct count, blanks, extremes, and the numeric totals when the values
              are numbers. The summary answers "is this column worth filtering on" before you filter. -->
         <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True" Opened="OnPopupOpened">
-            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="268" MaxHeight="440" Margin="0,4,0,0">
+            <!-- Width/MaxHeight were 268/440 -- enough chrome sits above the value list (mode
+                 buttons, sort row, the whole "match by text" block) that at 440 the list itself
+                 was down to one visible row before Cancel/Apply, with no way to tell there was
+                 more to scroll to. 560 leaves comfortable room on any window this app can be
+                 usefully run in; the value list also gets its own MinHeight below so it can never
+                 be squeezed away regardless of how much the rest of the popup needs. -->
+            <Border x:Name="ColumnFilterPopupBorder" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="300" MaxHeight="560" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
@@ -854,8 +871,8 @@
                     <!-- Sorting and the per-column filter live here rather than on the header itself:
                          a header click is already how you resize and reorder, and this is where a
                          user goes looking for what a column can do. -->
-                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                             <Button Content="Sort A→Z" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortAscendingClick" />
                             <Button Content="Sort Z→A" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortDescendingClick" />
                             <!-- "Clear sort", not "Clear": there is a second Clear further down for the
@@ -869,7 +886,7 @@
                              reads as one confusing form. Each gets a heading, and the second says "or"
                              so the relationship between them is legible at a glance. -->
                         <TextBlock Text="MATCH BY TEXT" FontSize="10" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,4" />
                         <Grid Margin="0,0,0,6">
                             <TextBox x:Name="ColumnPatternBox" KeyDown="OnColumnPatternBoxKeyDown"
                                      AutomationProperties.Name="Match this column by text"
@@ -937,15 +954,29 @@
                             <TextBlock x:Name="ColumnFilterLoadingText" DockPanel.Dock="Top" Text="Loading values…" FontSize="12"
                                        FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
                             <!-- Shown when the column has more distinct values than the lookup collects, so a
-                                 partial list is never presented as the complete set. -->
-                            <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="11"
-                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or match by text instead."
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                 partial list is never presented as the complete set. Kept to one line
+                                 (was a full sentence wrapping to three) -- it was costing the value list
+                                 itself almost as much vertical room as the thing it was explaining. -->
+                            <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="10.5"
+                                       Text="Showing the first values only — search or match by text for more."
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,6" Visibility="Collapsed" />
+                            <!-- MinHeight guarantees several rows stay visible and scrollable no matter how
+                                 much the rest of the popup (sort row, match-by-text, truncation notice)
+                                 needs above it -- previously this could be squeezed down to a single row
+                                 with no visual cue there was more to scroll to. -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MinHeight="170">
                                 <ItemsControl x:Name="ColumnFilterValuesList">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}" />
+                                            <!-- A plain string Content has nothing to stop a long value running past
+                                                 the popup's edge -- this had no visible truncation at all before, so
+                                                 a long company name or the "very long value" sample in
+                                                 40-datatypes-mixed.dif just overflowed. TextTrimming ellipsizes it;
+                                                 the tooltip still shows the whole thing. -->
+                                            <CheckBox IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}"
+                                                      ToolTip="{Binding DisplayText}">
+                                                <TextBlock Text="{Binding DisplayText}" TextTrimming="CharacterEllipsis" />
+                                            </CheckBox>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
