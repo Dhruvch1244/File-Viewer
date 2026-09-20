@@ -237,8 +237,16 @@
                         <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
+                                <!-- Split button: Copy alone does the common thing (selected rows, with
+                                     headers, tab-separated) so the default stays one click, and the caret
+                                     holds the variants rather than making the toolbar carry four buttons. -->
                                 <Button Content="Copy" Style="{StaticResource ToolbarButtonStyle}" Click="OnCopyClick"
+                                        Padding="10,6,6,6"
                                         ToolTip="Copy the selected rows as tab-separated text (Ctrl+C) — pastes straight into Excel" />
+                                <Button x:Name="CopyOptionsButton" Content="▾" Style="{StaticResource ToolbarButtonStyle}"
+                                        Padding="4,6,8,6" FontSize="10" Click="OnCopyOptionsClick"
+                                        AutomationProperties.Name="Copy options"
+                                        ToolTip="Other ways to copy — without headers, as CSV, or every row in view" />
                                 <Button x:Name="FileInfoButton" Content="File info" Style="{StaticResource ToolbarButtonStyle}" Click="OnFileInfoClick"
                                         ToolTip="Header metadata, section details and any parser warnings for this file" />
                             </StackPanel>
@@ -630,6 +638,18 @@
                     </StackPanel>
                 </Grid>
             </Border>
+
+            <!-- Transient confirmation, over the grid rather than in the status bar: a copy gives no
+                 other feedback at all, and a grey line at the bottom of the window is not where
+                 anyone is looking after pressing Ctrl+C. Fades itself out; see ShowToast. -->
+            <Border x:Name="Toast" Visibility="Collapsed" Opacity="0" IsHitTestVisible="False"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,32"
+                    Background="{DynamicResource TextPrimaryBrush}" CornerRadius="8" Padding="18,10">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.18" BlurRadius="20" ShadowDepth="3" Direction="270" />
+                </Border.Effect>
+                <TextBlock x:Name="ToastText" Foreground="{DynamicResource SurfaceBrush}" FontSize="12.5" FontWeight="SemiBold" />
+            </Border>
             </Grid>
         </DockPanel>
 
@@ -737,6 +757,62 @@
                         </ItemsControl>
                     </ScrollViewer>
                 </DockPanel>
+            </Border>
+        </Popup>
+
+        <!-- ============================== Copy options ============================ -->
+        <!-- Each entry names what lands on the clipboard, with the reason underneath, because
+             "Copy as CSV" and "Copy without headers" are indistinguishable from the default until
+             you have already pasted somewhere and looked. -->
+        <Popup x:Name="CopyOptionsPopup" PlacementTarget="{Binding ElementName=CopyOptionsButton}" Placement="Bottom"
+               StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="8" Width="300" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
+                <StackPanel>
+                    <TextBlock Text="COPY" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,4,8,8" />
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyDefaultMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Selected rows" FontSize="12.5" />
+                            <TextBlock Text="With headers, tab-separated — what the Copy button does"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyWithoutHeadersMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Selected rows, no headers" FontSize="12.5" />
+                            <TextBlock Text="Values only — for pasting under rows you already have"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyAsCsvMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Selected rows as CSV" FontSize="12.5" />
+                            <TextBlock Text="Commas and quoting, the same as an exported .csv"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="8,6" />
+
+                    <Button Style="{StaticResource ToolbarButtonStyle}" HorizontalContentAlignment="Left" Padding="8,6"
+                            Click="OnCopyAllRowsMenuClick">
+                        <StackPanel>
+                            <TextBlock Text="Every row in view" FontSize="12.5" />
+                            <TextBlock Text="Everything the filters leave, across all pages — ticked or not"
+                                       FontSize="10.5" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
             </Border>
         </Popup>
 
