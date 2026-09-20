@@ -37,6 +37,13 @@ public sealed class FileViewerSession : IDisposable
 
     public SortDirection? CurrentSortDirection { get; private set; }
 
+    /// <summary>
+    /// True when this session holds edits that exist nowhere but in memory. The source file is never
+    /// written to, so everything edited is lost unless it is exported — which is why closing needs to
+    /// ask first.
+    /// </summary>
+    public bool HasPendingEdits => !Overlay.IsEmpty;
+
     private FileViewerSession(FileIndex fileIndex, int cacheCapacity)
     {
         FileIndex = fileIndex;
@@ -116,8 +123,14 @@ public sealed class FileViewerSession : IDisposable
     /// needs to export "what is on screen" (the grid's filters and sort applied) or just the rows
     /// the user has ticked, rather than the whole section.
     /// </summary>
-    public void Export(Stream stream, IRowExporter exporter, IEnumerable<long> rowOrder, int? maxRows = null) =>
-        ExportRunner.Export(stream, FileIndex, Overlay, Cache, rowOrder, exporter, maxRows);
+    public void Export(
+        Stream stream,
+        IRowExporter exporter,
+        IEnumerable<long> rowOrder,
+        int? maxRows = null,
+        IProgress<long>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        ExportRunner.Export(stream, FileIndex, Overlay, Cache, rowOrder, exporter, maxRows, progress, cancellationToken);
 
     public string GeneratePreview(IRowExporter exporter) =>
         PreviewGenerator.GeneratePreview(FileIndex, Overlay, Cache, GetExportRowOrder(), exporter);

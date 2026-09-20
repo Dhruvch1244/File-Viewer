@@ -16,10 +16,10 @@ namespace FileViewer.Core.Overlay;
 /// overlap. All access goes through methods (never a raw exposed collection you could iterate
 /// outside the lock), so there is no way to accidentally bypass the lock from a new call site.
 ///
-/// <see cref="GetPendingRowOps"/> is a snapshot of the undo stack (append/pop-only). Cell edits are
-/// intentionally not part of it — only row-structural operations (add/delete/duplicate/restore) are
-/// individually undoable, matching the PRS §9 data-model sketch, which comments the row-op list
-/// alone as "also the undo stack".
+/// <see cref="GetPendingRowOps"/> is a snapshot of the row-structural operations. The undo stack
+/// itself is separate and covers cell edits too, so Ctrl+Z reverses whatever the user last did — a
+/// mistyped cell being the case that matters most, since without it the only way back was to close
+/// the file and lose everything else along with it.
 /// </summary>
 public sealed class EditOverlay : IOverlayView
 {
@@ -28,14 +28,32 @@ public sealed class EditOverlay : IOverlayView
     private readonly List<RowOp> _rowOps = new();
     private readonly Dictionary<long, RowState> _rowStateIndex = new();
     private readonly Dictionary<long, string[]> _addedRowData = new();
+
+    /// <summary>
+    /// The undo stack proper: one entry per undoable change, newest last, covering cell edits as
+    /// well as row operations. <see cref="_rowOps"/> stays the record of row-structural changes
+    /// (which is what "is this row added" is derived from); this says what order everything happened
+    /// in, so Ctrl+Z reverses the last thing the user actually did rather than the last row
+    /// operation with any number of cell edits piled on top of it.
+    /// </summary>
+    private readonly List<UndoEntry> _undo = new();
+
     private long _nextSyntheticIndex = -1;
 
-    public bool CanUndo { get { lock (_gate) return _rowOps.Count > 0; } }
+    private enum UndoKind
+    {
+        RowOp,
+        CellEdit,
+    }
+
+    private readonly record struct UndoEntry(UndoKind Kind, long RowIndex);
+
+    public bool CanUndo { get { lock (_gate) return _undo.Count > 0; } }
 
     /// <summary>True when nothing has been edited: no cell edits, no added/duplicated rows, no deletions.</summary>
     public bool IsEmpty
     {
-        get { lock (_gate) return _cellEdits.Count == 0 && _rowOps.Count == 0 && _rowStateIndex.Count == 0; }
+        get { lock (_gate) return _cellEdits.Count == 0 && _rowOps.Count == 0 && _rowStateIndex.Count == 0 && _undo.Count == 0; }
     }
 
     /// <summary>
@@ -73,6 +91,7 @@ public sealed class EditOverlay : IOverlayView
                 _cellEdits[rowIndex] = edits;
             }
             edits.Add(new CellEdit(rowIndex, column, newValue));
+            _undo.Add(new UndoEntry(UndoKind.CellEdit, rowIndex));
         }
     }
 
@@ -169,6 +188,7 @@ public sealed class EditOverlay : IOverlayView
                 {
                     RowOp op = _rowOps[i];
                     _rowOps.RemoveAt(i);
+                    RemoveLastUndoEntryNoLock(UndoKind.RowOp, rowIndex);
                     ApplyReversalNoLock(op);
                     return true;
                 }
@@ -177,15 +197,42 @@ public sealed class EditOverlay : IOverlayView
         }
     }
 
-    /// <summary>Reverses the single most recent row operation (LIFO).</summary>
+    /// <summary>
+    /// Reverses the single most recent change (LIFO), whether that was a row operation or a cell
+    /// edit. Undoing a cell edit drops the last recorded value for that cell, which — since edits
+    /// resolve in order with the last one winning — restores whatever the cell showed before it:
+    /// the previous edit, or the file's own value if there was none.
+    /// </summary>
     public void Undo()
     {
         lock (_gate)
         {
+            if (_undo.Count == 0) return;
+
+            UndoEntry entry = _undo[^1];
+            _undo.RemoveAt(_undo.Count - 1);
+
+            if (entry.Kind == UndoKind.CellEdit)
+            {
+                UndoCellEditNoLock(entry.RowIndex);
+                return;
+            }
+
             if (_rowOps.Count == 0) return;
             RowOp op = _rowOps[^1];
             _rowOps.RemoveAt(_rowOps.Count - 1);
             ApplyReversalNoLock(op);
+        }
+    }
+
+    private void UndoCellEditNoLock(long rowIndex)
+    {
+        if (!_cellEdits.TryGetValue(rowIndex, out List<CellEdit>? edits) || edits.Count == 0) return;
+
+        edits.RemoveAt(edits.Count - 1);
+        if (edits.Count == 0)
+        {
+            _cellEdits.Remove(rowIndex);
         }
     }
 
@@ -222,6 +269,18 @@ public sealed class EditOverlay : IOverlayView
         }
     }
 
+    private void RemoveLastUndoEntryNoLock(UndoKind kind, long rowIndex)
+    {
+        for (int i = _undo.Count - 1; i >= 0; i--)
+        {
+            if (_undo[i].Kind == kind && _undo[i].RowIndex == rowIndex)
+            {
+                _undo.RemoveAt(i);
+                return;
+            }
+        }
+    }
+
     private RowState GetRowStateNoLock(long rowIndex) => _rowStateIndex.GetValueOrDefault(rowIndex, RowState.Normal);
 
     private void PushOpNoLock(RowOpType type, long rowIndex)
@@ -237,6 +296,7 @@ public sealed class EditOverlay : IOverlayView
         };
 
         _rowOps.Add(new RowOp(type, rowIndex, previousState));
+        _undo.Add(new UndoEntry(UndoKind.RowOp, rowIndex));
         _rowStateIndex[rowIndex] = newState;
     }
 
@@ -247,10 +307,12 @@ public sealed class EditOverlay : IOverlayView
             case RowOpType.Add:
             case RowOpType.Duplicate:
                 // Undoing an add/duplicate discards it entirely, including any edits made to it
-                // while it existed only in the overlay.
+                // while it existed only in the overlay — so those edits must leave the undo stack
+                // too, or a later Ctrl+Z would try to reverse an edit to a row that no longer exists.
                 _rowStateIndex.Remove(op.RowIndex);
                 _addedRowData.Remove(op.RowIndex);
                 _cellEdits.Remove(op.RowIndex);
+                _undo.RemoveAll(entry => entry.Kind == UndoKind.CellEdit && entry.RowIndex == op.RowIndex);
                 break;
 
             case RowOpType.Delete:

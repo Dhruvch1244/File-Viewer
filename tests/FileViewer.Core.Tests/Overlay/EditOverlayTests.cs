@@ -32,17 +32,77 @@ public class EditOverlayTests
     }
 
     [Fact]
-    public void AddRow_ThenUndo_RemovesStateTemplateAndEdits()
+    public void AddRow_ThenEditIt_UndoesTheEditFirstThenTheRow()
     {
+        // Cell edits are undoable, so Ctrl+Z reverses whatever was done last — here the edit, then
+        // the row. (Before cell edits joined the undo stack, a single undo threw away both.)
         var overlay = new EditOverlay();
         long index = overlay.AddRow(Columns);
         overlay.EditCell(index, "_ID", "NEW_ID");
 
         overlay.Undo();
 
+        Assert.Equal(RowState.Added, overlay.GetRowState(index));
+        Assert.True(overlay.TryGetAddedRowTemplate(index, out _));
+        Assert.False(overlay.TryGetCellEdits(index, out _));
+
+        overlay.Undo();
+
         Assert.Equal(RowState.Normal, overlay.GetRowState(index));
         Assert.False(overlay.TryGetAddedRowTemplate(index, out _));
+        Assert.False(overlay.CanUndo);
+    }
+
+    [Fact]
+    public void ReversingAnAddedRow_DiscardsEditsStillOnIt()
+    {
+        var overlay = new EditOverlay();
+        long index = overlay.AddRow(Columns);
+        overlay.EditCell(index, "_ID", "NEW_ID");
+
+        // Reverses the add itself while the edit is still outstanding.
+        Assert.True(overlay.RestoreRow(index));
+
+        Assert.False(overlay.TryGetAddedRowTemplate(index, out _));
         Assert.False(overlay.TryGetCellEdits(index, out _));
+        // The discarded edit must not be left on the undo stack pointing at a row that is gone.
+        Assert.False(overlay.CanUndo);
+    }
+
+    [Fact]
+    public void EditCell_ThenUndo_RestoresTheValueBeforeThatEdit()
+    {
+        var overlay = new EditOverlay();
+        overlay.EditCell(7, "PRICE", "100.00");
+        overlay.EditCell(7, "PRICE", "200.00");
+
+        Assert.True(overlay.CanUndo);
+        overlay.Undo();
+
+        Assert.True(overlay.TryGetCellEdits(7, out IReadOnlyList<CellEdit> afterFirstUndo));
+        Assert.Equal("100.00", Assert.Single(afterFirstUndo).NewValue);
+
+        overlay.Undo();
+
+        Assert.False(overlay.TryGetCellEdits(7, out _));
+        Assert.False(overlay.CanUndo);
+        Assert.True(overlay.IsEmpty);
+    }
+
+    [Fact]
+    public void Undo_ReversesEditsAndRowOperationsInTheOrderTheyHappened()
+    {
+        var overlay = new EditOverlay();
+        overlay.EditCell(3, "PRICE", "1.00");
+        overlay.DeleteRow(4);
+
+        overlay.Undo(); // the delete came last
+        Assert.Equal(RowState.Normal, overlay.GetRowState(4));
+        Assert.True(overlay.TryGetCellEdits(3, out _));
+
+        overlay.Undo(); // then the edit
+        Assert.False(overlay.TryGetCellEdits(3, out _));
+        Assert.False(overlay.CanUndo);
     }
 
     [Fact]

@@ -13,6 +13,9 @@ namespace FileViewer.Core.Export;
 /// </summary>
 public static class ExportRunner
 {
+    /// <summary>Rows written between <paramref name="progress"/> reports — often enough to animate a progress bar, rare enough not to flood the UI thread.</summary>
+    private const int ProgressReportInterval = 5_000;
+
     public static void Export(
         Stream stream,
         FileIndex fileIndex,
@@ -20,11 +23,13 @@ public static class ExportRunner
         DecodedRowCache cache,
         IEnumerable<long> orderedRowIndices,
         IRowExporter exporter,
-        int? maxRows = null)
+        int? maxRows = null,
+        IProgress<long>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         exporter.Begin(stream, fileIndex.Header.ColumnNames);
 
-        int written = 0;
+        long written = 0;
         foreach (long rowIndex in orderedRowIndices)
         {
             if (maxRows is int max && written >= max) break;
@@ -34,9 +39,18 @@ public static class ExportRunner
 
             exporter.WriteRow(resolved);
             written++;
+
+            if (written % ProgressReportInterval == 0)
+            {
+                // Checked on the same interval as the progress report: a cancelled export stops
+                // promptly without paying for a token check per row.
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Report(written);
+            }
         }
 
         exporter.End();
+        progress?.Report(written);
     }
 
     /// <summary>Base file row order (0..RowCount-1) followed by any currently-live Added/Duplicated rows, in creation order.</summary>

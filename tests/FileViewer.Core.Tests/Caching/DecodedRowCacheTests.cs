@@ -148,4 +148,43 @@ public class DecodedRowCacheTests
         Assert.Null(exception);
         Assert.True(cache.Count <= 64);
     }
+
+    [Fact]
+    public void EnsureCapacity_GrowsToHoldAPageButNeverShrinks()
+    {
+        var cache = new DecodedRowCache(capacity: 10);
+
+        cache.EnsureCapacity(5_000);
+        Assert.Equal(5_000, cache.Capacity);
+
+        // A smaller page must not shrink the cache back and throw away rows already decoded.
+        cache.EnsureCapacity(100);
+        Assert.Equal(5_000, cache.Capacity);
+    }
+
+    [Fact]
+    public void EnsureCapacity_IsBoundedSoAllRowsCannotTurnTheCacheIntoTheFile()
+    {
+        var cache = new DecodedRowCache(capacity: 10);
+
+        cache.EnsureCapacity(int.MaxValue);
+
+        Assert.Equal(DecodedRowCache.MaxCapacity, cache.Capacity);
+    }
+
+    [Fact]
+    public void EnsureCapacity_LetsMoreRowsStayCachedThanTheOriginalCapacity()
+    {
+        var cache = new DecodedRowCache(capacity: 2);
+        cache.EnsureCapacity(DecodedRowCache.DefaultCapacity);
+
+        for (long i = 0; i < 100; i++)
+        {
+            cache.Set(i, new DecodedRow(i, [$"row{i}"]));
+        }
+
+        // With the original capacity of 2 all but the last two would have been evicted.
+        Assert.Equal(100, cache.Count);
+        Assert.True(cache.TryGet(0, out _));
+    }
 }

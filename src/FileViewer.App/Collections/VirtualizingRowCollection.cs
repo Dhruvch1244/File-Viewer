@@ -236,6 +236,12 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
 
         _pageSize = clamped;
         _pageIndex = clamped is int newSize ? Math.Clamp(firstVisibleRow / newSize, 0, PageCount - 1) : 0;
+
+        // A decoded-row cache smaller than the page means scrolling within one page evicts rows that
+        // are still on screen, and every re-render re-reads and re-decodes them. Ask for room for a
+        // page and a bit; the cache caps the request itself.
+        session.Cache.EnsureCapacity(PageSize + (PageSize / 2));
+
         RaiseReset();
     }
 

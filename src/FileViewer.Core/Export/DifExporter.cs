@@ -41,7 +41,16 @@ public sealed class DifExporter(FileIndex sourceFileIndex) : IRowExporter
 
     public void WriteRow(ResolvedRow row)
     {
-        _writer!.WriteLine(string.Join(sourceFileIndex.Header.Delimiter, row.FieldValues));
+        // Field by field rather than string.Join: joining allocates a whole row's worth of string
+        // per row, and an export of a few million rows is exactly where that shows up.
+        char delimiter = sourceFileIndex.Header.Delimiter;
+        IReadOnlyList<string> fields = row.FieldValues;
+        for (int i = 0; i < fields.Count; i++)
+        {
+            if (i > 0) _writer!.Write(delimiter);
+            _writer!.Write(fields[i]);
+        }
+        _writer!.WriteLine();
     }
 
     public void End()

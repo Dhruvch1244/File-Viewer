@@ -73,6 +73,9 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
 
     public GridViewModel? Grid => ActiveSection?.Grid;
 
+    /// <summary>True if any section of this file holds edits that have not been exported anywhere.</summary>
+    public bool HasUnsavedEdits => Sections.Any(section => section.Grid?.Session.HasPendingEdits == true);
+
     /// <summary>The file name alone, and the folder holding it — the two halves a disambiguated title is built from.</summary>
     internal string FileName => Path.GetFileName(FilePath);
 

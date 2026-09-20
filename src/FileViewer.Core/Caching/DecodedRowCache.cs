@@ -16,7 +16,7 @@ public sealed class DecodedRowCache
     public const int DefaultCapacity = 4096;
 
     private readonly object _gate = new();
-    private readonly int _capacity;
+    private int _capacity;
     private readonly Dictionary<long, LinkedListNode<CacheEntry>> _map;
     private readonly LinkedList<CacheEntry> _lruList = new();
 
@@ -28,6 +28,32 @@ public sealed class DecodedRowCache
     }
 
     public int Count { get { lock (_gate) return _map.Count; } }
+
+    public int Capacity { get { lock (_gate) return _capacity; } }
+
+    /// <summary>
+    /// Raises the capacity to hold at least <paramref name="minimumCapacity"/> rows (never lowers
+    /// it). The grid calls this when the page size changes: a cache smaller than a page means
+    /// scrolling within one page evicts rows that are still on screen, so every re-render re-reads
+    /// and re-decodes them. Capped at <see cref="MaxCapacity"/> so asking for "all rows" of a
+    /// multi-million-row file doesn't turn the cache into a copy of the file.
+    /// </summary>
+    public void EnsureCapacity(int minimumCapacity)
+    {
+        int wanted = Math.Clamp(minimumCapacity, DefaultCapacity, MaxCapacity);
+        lock (_gate)
+        {
+            if (wanted <= _capacity) return;
+            _capacity = wanted;
+        }
+    }
+
+    /// <summary>
+    /// Ceiling on <see cref="EnsureCapacity"/>. A decoded row is a string array, so this bounds the
+    /// cache at something like tens of megabytes for a wide file rather than letting it track the
+    /// file's own size.
+    /// </summary>
+    public const int MaxCapacity = 50_000;
 
     public bool TryGet(long rowIndex, out DecodedRow row)
     {

@@ -31,6 +31,9 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
     private DateTime _selectedDate = DateTime.Today;
     private string _previewText = string.Empty;
     private ExportScope _scope = ExportScope.CurrentView;
+    private CancellationTokenSource? _exportCts;
+    private double _exportProgress;
+    private string _exportStatus = string.Empty;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -92,6 +95,30 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
         // One section of a bulk file exports under its own name, so exporting two of them doesn't
         // propose the same file name twice.
         Session.FileIndex.Header.IsMultiSection ? Session.FileIndex.Header.SectionName : null);
+
+    /// <summary>True while a write is in flight — swaps the Export button for Cancel and shows the progress bar.</summary>
+    public bool IsExporting => _exportCts is not null;
+
+    /// <summary>Rows written so far, as a percentage of the rows this export covers.</summary>
+    public double ExportProgress
+    {
+        get => _exportProgress;
+        private set
+        {
+            _exportProgress = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ExportProgress)));
+        }
+    }
+
+    public string ExportStatus
+    {
+        get => _exportStatus;
+        private set
+        {
+            _exportStatus = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ExportStatus)));
+        }
+    }
 
     public string PreviewText
     {
@@ -197,36 +224,72 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
         };
         if (dialog.ShowDialog() != true) return;
 
-        // The streaming write itself must not block the UI thread, same as indexing — disable the
-        // whole dialog (not just this button) so the format or scope can't change mid-export.
-        IsEnabled = false;
+        _exportCts = new CancellationTokenSource();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExporting)));
+        ExportProgress = 0;
+
         try
         {
             if (_scope == ExportScope.AllSections && _tab is not null)
             {
-                await ExportEverySectionAsync(Path.GetDirectoryName(dialog.FileName) ?? string.Empty, _format, CurrentFormatToken());
+                await ExportEverySectionAsync(Path.GetDirectoryName(dialog.FileName) ?? string.Empty, _format, CurrentFormatToken(), _exportCts.Token);
             }
             else
             {
                 string path = dialog.FileName;
                 ExportFormatKind format = _format;
                 List<long> rows = CurrentScopeRows();
+                CancellationToken token = _exportCts.Token;
+                var progress = new Progress<long>(written => ReportProgress(written, rows.Count, Path.GetFileName(path)));
+
                 await Task.Run(() =>
                 {
-                    using FileStream stream = File.Create(path);
+                    using FileStream stream = CreateOutputStream(path);
                     using IRowExporter exporter = CreateExporter(format, Session);
-                    Session.Export(stream, exporter, rows);
-                });
+                    Session.Export(stream, exporter, rows, maxRows: null, progress, token);
+                }, token);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            ExportStatus = "Export cancelled.";
+            FinishExport();
+            return;
         }
         finally
         {
-            IsEnabled = true;
+            FinishExport();
         }
 
         DialogResult = true;
         Close();
     }
+
+    private void OnCancelExportClick(object sender, RoutedEventArgs e)
+    {
+        _exportCts?.Cancel();
+        ExportStatus = "Cancelling…";
+    }
+
+    private void FinishExport()
+    {
+        _exportCts?.Dispose();
+        _exportCts = null;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExporting)));
+    }
+
+    private void ReportProgress(long written, int total, string fileName)
+    {
+        ExportProgress = total <= 0 ? 0 : Math.Min(100, 100.0 * written / total);
+        ExportStatus = $"{fileName}: {written:N0} of {total:N0} row(s)";
+    }
+
+    /// <summary>
+    /// A 256 KB write buffer rather than the 4 KB default, and a sequential-write hint. An export can
+    /// be gigabytes; the default buffer turns that into hundreds of thousands of small writes.
+    /// </summary>
+    private static FileStream CreateOutputStream(string path) =>
+        new(path, FileMode.Create, FileAccess.Write, FileShare.None, 256 * 1024, FileOptions.SequentialScan);
 
     /// <summary>
     /// Writes one file per section of a bulk file, named for the section. A section already open
@@ -234,10 +297,12 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
     /// opened is indexed here, on the fly, and exports in full — so "every section" doesn't
     /// quietly skip the ones that were never looked at.
     /// </summary>
-    private async Task ExportEverySectionAsync(string directory, ExportFormatKind format, string formatToken)
+    private async Task ExportEverySectionAsync(string directory, ExportFormatKind format, string formatToken, CancellationToken cancellationToken)
     {
         foreach (FileSectionViewModel section in _tab!.Sections)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             string fileName = ExportFileNaming.BuildFileName(
                 _tab.FilePath, formatToken, DateOnly.FromDateTime(_selectedDate), section.Name);
             string path = Path.Combine(directory, fileName);
@@ -246,22 +311,26 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
             {
                 List<long> rows = [.. sectionGrid.Rows.GetAllRowIndices()];
                 FileViewerSession session = sectionGrid.Session;
+                var progress = new Progress<long>(written => ReportProgress(written, rows.Count, fileName));
                 await Task.Run(() =>
                 {
-                    using FileStream stream = File.Create(path);
+                    using FileStream stream = CreateOutputStream(path);
                     using IRowExporter exporter = CreateExporter(format, session);
-                    session.Export(stream, exporter, rows);
-                });
+                    session.Export(stream, exporter, rows, maxRows: null, progress, cancellationToken);
+                }, cancellationToken);
                 continue;
             }
 
-            using FileViewerSession opened = await FileViewerSession.OpenSectionAsync(_tab.FilePath, _tab.Layout, section.Index);
+            using FileViewerSession opened = await FileViewerSession.OpenSectionAsync(
+                _tab.FilePath, _tab.Layout, section.Index, cancellationToken: cancellationToken);
+            int sectionRowCount = (int)opened.FileIndex.RowIndex.Count;
+            var sectionProgress = new Progress<long>(written => ReportProgress(written, sectionRowCount, fileName));
             await Task.Run(() =>
             {
-                using FileStream stream = File.Create(path);
+                using FileStream stream = CreateOutputStream(path);
                 using IRowExporter exporter = CreateExporter(format, opened);
-                opened.Export(stream, exporter);
-            });
+                opened.Export(stream, exporter, opened.GetExportRowOrder(), maxRows: null, sectionProgress, cancellationToken);
+            }, cancellationToken);
         }
     }
 

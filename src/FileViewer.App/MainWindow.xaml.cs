@@ -56,6 +56,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _viewModel;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.ConfirmDiscardingEdits = ConfirmDiscardingEdits;
         Loaded += OnWindowLoaded;
     }
 
@@ -169,6 +170,34 @@ public partial class MainWindow : Window
                 await _viewModel.CycleTabAsync(shift ? -1 : 1);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Asks before a file's in-memory edits are thrown away. The app never writes to the source
+    /// file, so an unexported edit is gone the moment its tab closes.
+    /// </summary>
+    private bool ConfirmDiscardingEdits(FileTabViewModel tab) =>
+        MessageBox.Show(
+            $"'{tab.Title}' has edits that haven't been exported.\n\nClose it and discard them?",
+            "Bloomberg File Viewer",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel) == MessageBoxResult.OK;
+
+    /// <summary>The same question for the whole window: closing it discards every open file's edits at once.</summary>
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        if (e.Cancel || !_viewModel.HasUnsavedEdits) return;
+
+        bool discard = MessageBox.Show(
+            "Some open files have edits that haven't been exported.\n\nClose anyway and discard them?",
+            "Bloomberg File Viewer",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel) == MessageBoxResult.OK;
+
+        e.Cancel = !discard;
     }
 
     /// <summary>Releases every open file's index/handles on close — each tab holds unmanaged row-index memory and an open file handle.</summary>

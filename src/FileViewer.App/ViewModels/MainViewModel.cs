@@ -320,10 +320,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Closes whichever tab is on screen — Ctrl+W.</summary>
     public void CloseActiveTab() => CloseTab(ActiveTab);
 
+    /// <summary>
+    /// Asked before a tab holding unexported edits is closed; returning false cancels the close.
+    /// Supplied by the window (this is where a dialog belongs), left null in tests, where closing
+    /// simply proceeds.
+    /// </summary>
+    public Func<FileTabViewModel, bool>? ConfirmDiscardingEdits { get; set; }
+
+    /// <summary>True if any open file holds edits that exist only in memory — what the window checks before letting itself close.</summary>
+    public bool HasUnsavedEdits => Tabs.Any(tab => tab.HasUnsavedEdits);
+
     /// <summary>Closes a tab, disposing every section it had indexed, and falls back to the neighbouring tab.</summary>
     public void CloseTab(FileTabViewModel? tab)
     {
         if (tab is null) return;
+
+        // Edits live in the overlay until they are exported, so closing throws them away. Say so
+        // rather than doing it silently.
+        if (tab.HasUnsavedEdits && ConfirmDiscardingEdits?.Invoke(tab) == false) return;
 
         int closedIndex = Tabs.IndexOf(tab);
         Tabs.Remove(tab);
