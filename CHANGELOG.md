@@ -5,6 +5,50 @@ workflow publishes a `win-x64` build when a `v*.*.*` tag is pushed.
 
 This file starts at 0.1.5; releases 0.0.1 through 0.1.4 predate it and have no entries here.
 
+## 0.1.6
+
+### Fixed
+
+- **Data columns rendered at zero width.** Every file opened to rows with no data columns visible
+  at all — only the fixed select/view/delete columns showed, headers included. Column
+  virtualization measured an auto-sized column against cells that did not exist yet and it settled
+  at zero width, taking its header with it. Columns now have an explicit default width and column
+  virtualization is off (row virtualization, which is what matters at millions of rows, is
+  untouched).
+- **"Fit to window" did nothing until the next resize.** Picking it from the rows-per-page menu left
+  the grid on whatever page size it had before, until the window was manually resized. It now
+  re-measures as soon as it's picked.
+- **The filtering indicator stuck on the welcome screen.** With no file open, "Filtering…" and a
+  Stop button sat at the bottom of the window regardless — a failed binding falling back to its
+  default of visible, not an active filter. The whole paging/status bar now hides with the rest of
+  the grid until a file is actually open.
+- **Bulk files delivered as concatenated whole-file envelopes lost every section name after the
+  first**, and a delivery with no outer `INAHDR`/`IMAHDR` at all was rejected outright. Some
+  Bloomberg deliveries are not one envelope with several inner `START-OF-FIELDS` blocks but several
+  complete envelopes — each its own `START-OF-FILE` … `DATA=<name>` … `END-OF-FILE` — laid end to
+  end with no single outer header. Both shapes now parse correctly, sections keep their own
+  `DATA=` name and `DATARECORDS=` count, and a file that opens with `START-OF-FILE` rather than a
+  header marker is accepted.
+
+### Changed
+
+- **Copy confirms itself.** Copying showed nothing except a line in the status bar, out of sight of
+  wherever you'd just pressed Ctrl+C. A toast now appears over the grid ("Copied 1,240 rows to
+  clipboard.") and fades after a couple of seconds; the status bar still gets the same text.
+- **Copy has variants**, behind a caret next to the Copy button: without headers, as CSV (quoted the
+  same way the CSV exporter writes files), or every row the current filters leave in view — across
+  all pages, not just the ticked rows. The default Copy button is unchanged.
+- **The column filter popup explains itself.** Its two ways of filtering a column — matching by text
+  and picking from a list of values — were stacked with no labels, reading as one confusing form.
+  They're now headed "MATCH BY TEXT" and "OR PICK FROM VALUES", both boxes have placeholders, and
+  the value list's "Clear" (which already meant "deselect everything") is now "Deselect all" so it
+  isn't read as "clear the filter" next to the sort row's own "Clear".
+- **A bulk file's section bar can split into tabs.** "Open all in tabs" gives every section its own
+  tab at once, instead of clicking through the section bar one at a time. Any indexing and edits
+  already done carry over — the same session moves to the new tab rather than the file being
+  re-read — so nothing is lost or repeated by splitting.
+- Ten more sample files in `test-files/`, covering both bulk shapes above.
+
 ## 0.1.5
 
 The app opens, browses, edits and exports Bloomberg DIF/GETDATA files up to 2 GB, keeping the whole
