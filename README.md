@@ -167,7 +167,10 @@ pwsh ./build-release.ps1
 
 This produces a self-contained, single-file, ReadyToRun `win-x64` build of `FileViewer.App` — no
 .NET runtime install required on the machine that runs it — and zips it up at
-`release/FileViewer-win-x64.zip`. To do it by hand instead:
+`release/FileViewer-win-x64-v<version>.zip`, with the README and changelog alongside the exe. The
+version comes from `<Version>` in `Directory.Build.props`, so the file name, the assembly and the
+release tag can't drift apart; the release workflow refuses to publish if the tag disagrees with it.
+To do it by hand instead:
 
 ```
 dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-win-x64

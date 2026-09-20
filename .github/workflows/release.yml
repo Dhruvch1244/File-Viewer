@@ -39,12 +39,53 @@ jobs:
             8.0.x
             9.0.x
 
-      - name: Resolve release tag
+      # The tag and Directory.Build.props both name a version, and a build labelled with one while
+      # reporting the other in its file properties is worse than a failed release — so this stops
+      # rather than shipping the mismatch.
+      - name: Resolve release tag and check it matches the project version
         id: tag
         shell: pwsh
         run: |
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ github.event.inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $tagVersion = $tag.TrimStart("v")
+
+          $props = Get-Content -Raw -Path "Directory.Build.props"
+          $match = [regex]::Match($props, '<Version>([^<]+)</Version>')
+          if (-not $match.Success) {
+              throw "No <Version> element in Directory.Build.props."
+          }
+          $projectVersion = $match.Groups[1].Value.Trim()
+
+          if ($tagVersion -ne $projectVersion) {
+              throw "Tag '$tag' does not match <Version>$projectVersion</Version> in Directory.Build.props. Update one of them and try again."
+          }
+
           "tag=$tag" >> $env:GITHUB_OUTPUT
+          "name=FileViewer-win-x64-v$projectVersion" >> $env:GITHUB_OUTPUT
+
+      # Just this version's section of the changelog becomes the release body. Handing over the
+      # whole file would put every past version into every future release's notes.
+      - name: Extract this version's release notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.tag.outputs.tag }}".TrimStart("v")
+          $notes = New-Object System.Collections.Generic.List[string]
+          $capturing = $false
+
+          foreach ($line in Get-Content -Path "CHANGELOG.md") {
+              if ($line -match '^##\s') {
+                  if ($capturing) { break }
+                  if ($line -match "^##\s+$([regex]::Escape($version))\b") { $capturing = $true }
+                  continue
+              }
+              if ($capturing) { $notes.Add($line) }
+          }
+
+          if ($notes.Count -eq 0) {
+              $notes.Add("See CHANGELOG.md for what changed in this release.")
+          }
+
+          Set-Content -Path "release-notes.md" -Value $notes
 
       - name: Restore
         run: |
@@ -59,18 +100,22 @@ jobs:
           dotnet test tests/FileViewer.App.Model.Tests/FileViewer.App.Model.Tests.csproj -c Release --no-restore
 
       - name: Publish
-        run: dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-win-x64
+        run: dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/${{ steps.tag.outputs.name }}
 
       - name: Zip release build
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          Compress-Archive -Path "publish/FileViewer-win-x64/*" -DestinationPath "release/FileViewer-win-x64.zip" -Force
+          # The README and changelog ride along, so a downloaded build says what it is and what
+          # changed without needing the repository.
+          Copy-Item README.md, CHANGELOG.md -Destination "publish/${{ steps.tag.outputs.name }}" -Force
+          Compress-Archive -Path "publish/${{ steps.tag.outputs.name }}/*" -DestinationPath "release/${{ steps.tag.outputs.name }}.zip" -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Bloomberg File Viewer ${{ steps.tag.outputs.tag }}
-          files: release/FileViewer-win-x64.zip
+          files: release/${{ steps.tag.outputs.name }}.zip
+          body_path: release-notes.md
           generate_release_notes: true
