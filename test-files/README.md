@@ -57,9 +57,12 @@ The export writes rows with the source's line ending, so a CRLF file stays CRLF.
 
 ## Bulk (multi-section) files
 
-A bulk export repeats the whole `START-OF-FIELDS` … `END-OF-DATA` block once per requested field,
-each block declaring its own columns. Every section appears in the section bar as its own table,
-and a section is indexed the first time you open it — not up front.
+There are two different shapes a "bulk" DIF file takes, and both are handled — the difference is
+where the envelope boundary falls.
+
+**One outer envelope, several inner field blocks** — a bulk export repeats the whole
+`START-OF-FIELDS` … `END-OF-DATA` block once per requested field, all inside a single
+`INAHDR`/`INATRL` (or `IMAHDR`/`IMATRL`) pair.
 
 | File | What it covers |
 | --- | --- |
@@ -68,7 +71,21 @@ and a section is indexed the first time you open it — not up front.
 | `32-bulk-unnamed-sections.dif` | Sections with no `DATA=` attribute — names are synthesized (`Section 1`, `Section 2`) so they're still tellable apart. |
 | `33-multi-section-plain-name.dif` | Multi-section, but nothing in the file name says "bulk". Detection has to come from the content, and does. |
 
-Try **Export → all sections** on `30` or `31`: one output file per section, each named after it.
+**Several whole file envelopes concatenated** — no single outer header/trailer at all. Each section
+is its own complete `START-OF-FILE` … `DATA=` … `START-OF-FIELDS` … `END-OF-DATA` … `END-OF-FILE`
+envelope, one after another in the same file, the way some Bloomberg DL deliveries actually arrive.
+
+| File | What it covers |
+| --- | --- |
+| `34-bulk-concatenated-envelopes.dif` | Three whole-file envelopes (`CALL_SCHEDULE`, `DVD_HIST`, `INDX_MEMBERS`), wrapped in one file-level `IMAHDR`/`IMATRL` pair. Each envelope's own `DATA=` name and `DATARECORDS=` count are kept — not swallowed into a later envelope's or the file trailer's. |
+| `35-bulk-envelopes-no-header-marker.dif` | The same three envelopes with no file-level `IMAHDR` at all — the file's first line is `START-OF-FILE` itself. Legal, and opens the same way. |
+
+Both shapes open identically in the app: one tab, a section bar naming every section, each section
+indexed the first time it's clicked. **Open all in tabs**, next to the section bar, splits a bulk
+tab into one tab per section — any edits already made carry over with the section rather than being
+discarded, since it's the same underlying session that moves, not a fresh read of the file.
+
+Try **Export → all sections** on `30`, `31` or `34`: one output file per section, each named after it.
 
 ## Column shapes
 
@@ -103,7 +120,7 @@ refused with a clear reason.
 | `63-edge-missing-end-of-data.dif` | No `END-OF-DATA` and no trailer. The data section is treated as running to end of file; two warnings say so. |
 | `64-edge-truncated-mid-row.dif` | Cut off mid-row, as a dead transfer would leave it. The partial last row is kept and shown as far as it goes. |
 | `65-edge-marker-trailing-content.dif` | `END-OF-DATA    (3 records returned)` — a marker with trailing content is still a marker, not a data row. |
-| `66-edge-not-a-dif-file.bin` | 4 KB of random bytes. Refused with "File does not start with 'INAHDR' or 'IMAHDR'" rather than a crash or a garbage grid. |
+| `66-edge-not-a-dif-file.bin` | 4 KB of random bytes. Refused with "File does not start with 'INAHDR', 'IMAHDR' or 'START-OF-FILE'" rather than a crash or a garbage grid. |
 
 The two "no warning" rows above are deliberate product behaviour, not gaps: the viewer displays
 records rather than validating them. `tests/FileViewer.Core.Tests` pins both.
