@@ -318,42 +318,41 @@ public partial class MainWindow : Window
 
     private void OnCopyOptionsClick(object sender, RoutedEventArgs e) => CopyOptionsPopup.IsOpen = !CopyOptionsPopup.IsOpen;
 
-    private void OnCopyOptionsCancelClick(object sender, RoutedEventArgs e) => CopyOptionsPopup.IsOpen = false;
-
     /// <summary>
-    /// JSON structurally always carries field names — that's what makes it JSON rather than a bare
-    /// array of arrays — so the "include column names" checkbox has nothing to do when JSON is
-    /// selected. Rather than silently ignoring it (which is exactly the kind of surprise this panel
-    /// replaced the old preset list to get away from), it's forced on and disabled while JSON is
-    /// picked, and given back to the user the moment they pick a format where it means something.
+    /// Resets every control back to what the plain Copy button does, each time the popup opens —
+    /// deliberately not remembered from the last time it was opened, so picking "All columns" once
+    /// doesn't silently change what a later plain click of Copy itself does, or what a later open
+    /// of this same popup starts on.
     /// </summary>
-    private void OnCopyFormatChanged(object sender, RoutedEventArgs e)
+    private void OnCopyOptionsPopupOpened(object sender, EventArgs e)
     {
-        // CopyFormatTsvOption is IsChecked="True" in markup, which can raise this Checked handler
-        // during InitializeComponent() itself — before CopyIncludeHeadersOption, declared later in
-        // the same popup, has been connected to its field yet. The null check is the only reliably
-        // portable way to guard that: WPF doesn't document the exact element-construction order
-        // markup-set property values fire their change events in. Nothing is lost by skipping the
-        // sync in that case — CopyIncludeHeadersOption's own XAML defaults (enabled, checked) already
-        // match what TSV, the initial selection, needs.
-        if (CopyIncludeHeadersOption is null) return;
+        OnPopupOpened(sender, e); // still gets the shared fade-in animation
 
-        bool json = ReferenceEquals(sender, CopyFormatJsonOption);
-        CopyIncludeHeadersOption.IsEnabled = !json;
-        if (json) CopyIncludeHeadersOption.IsChecked = true;
+        CopyRowsSelectedRadio.IsChecked = true;
+        CopyColumnsVisibleRadio.IsChecked = true;
+        CopyFormatTsvRadio.IsChecked = true;
+        CopyIncludeHeadersCheckBox.IsChecked = true;
+        CopyIncludeHeadersCheckBox.IsEnabled = true;
     }
 
-    private async void OnCopyOptionsApplyClick(object sender, RoutedEventArgs e)
+    /// <summary>JSON rows carry their own field names as object keys, so the headers checkbox has nothing to do there.</summary>
+    private void OnCopyFormatChanged(object sender, RoutedEventArgs e)
+    {
+        bool isJson = ReferenceEquals(sender, CopyFormatJsonRadio);
+        CopyIncludeHeadersCheckBox.IsEnabled = !isJson;
+    }
+
+    private async void OnCopyApplyClick(object sender, RoutedEventArgs e)
     {
         CopyOptionsPopup.IsOpen = false;
 
         var options = new ClipboardOptions(
-            Scope: CopyRowsAllInViewOption.IsChecked == true ? ClipboardScope.AllRowsInView : ClipboardScope.SelectedRows,
-            ColumnScope: CopyColumnsAllOption.IsChecked == true ? ClipboardColumnScope.AllColumns : ClipboardColumnScope.VisibleColumns,
-            Format: CopyFormatJsonOption.IsChecked == true ? ClipboardFormat.Json
-                : CopyFormatCsvOption.IsChecked == true ? ClipboardFormat.Csv
-                : ClipboardFormat.TabSeparated,
-            IncludeHeaders: CopyIncludeHeadersOption.IsChecked == true);
+            Scope: CopyRowsAllInViewRadio.IsChecked == true ? ClipboardScope.AllRowsInView : ClipboardScope.SelectedRows,
+            ColumnScope: CopyColumnsAllRadio.IsChecked == true ? ClipboardColumnScope.AllColumns : ClipboardColumnScope.VisibleColumns,
+            Format: CopyFormatJsonRadio.IsChecked == true ? ClipboardFormat.Json
+                  : CopyFormatCsvRadio.IsChecked == true ? ClipboardFormat.Csv
+                  : ClipboardFormat.TabSeparated,
+            IncludeHeaders: CopyIncludeHeadersCheckBox.IsChecked == true);
 
         await CopySelectionAsync(options);
     }
@@ -390,7 +389,7 @@ public partial class MainWindow : Window
             ClipboardFormat.Json => "as JSON",
             _ => "to clipboard",
         };
-        string columns = options.ColumnScope == ClipboardColumnScope.AllColumns ? ", all columns" : "";
+        if (options.ColumnScope == ClipboardColumnScope.AllColumns) what += ", all columns";
         ShowToast(payload.Truncated
             ? $"Copied the first {payload.RowCount:N0} of your rows {what}{columns} — more than the {GridViewModel.MaxClipboardRows:N0} row limit."
             : $"Copied {payload.RowCount:N0} row{(payload.RowCount == 1 ? "" : "s")} {what}{columns}.");
