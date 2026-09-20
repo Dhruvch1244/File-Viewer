@@ -835,7 +835,15 @@
              actually holds — distinct count, blanks, extremes, and the numeric totals when the values
              are numbers. The summary answers "is this column worth filtering on" before you filter. -->
         <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True" Opened="OnPopupOpened">
-            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="268" MaxHeight="440" Margin="0,4,0,0">
+            <!-- MaxHeight is generous, and deliberately not tight: the value list used to be squeezed
+                 down to a sliver of a scroll area — one row visible, sometimes none — because it sat
+                 as this DockPanel's leftover-space child, last in line behind the title, the mode
+                 buttons, the sort/match-by-text block and (whenever a column had more distinct values
+                 than the lookup collects) a three-line truncation notice. Whatever survived that queue
+                 is what the list got, and for a real column it was often nothing. See ColumnValuesPanel
+                 below for the actual fix: everything that isn't Cancel/Apply now scrolls as one unit,
+                 so there's no fixed budget for chrome to exhaust before the list gets a turn. -->
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Width="280" MaxHeight="560" Margin="0,4,0,0">
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
                 </Border.Effect>
@@ -894,59 +902,70 @@
                     </StackPanel>
 
                     <Grid>
+                        <!-- Everything here except Cancel/Apply lives inside ONE ScrollViewer, deliberately —
+                             see the note on ColumnFilterPopup above. A DockPanel's last (fill) child only gets
+                             whatever space the docked items ahead of it left over, and can be squeezed to
+                             nothing; putting the header, search box, select/deselect row and the value list
+                             all inside the same scrollable region means there is no fixed budget to exhaust —
+                             the group scrolls as a unit, so every value is reachable by scrolling however far
+                             it takes, never by a sliver of a scrollbar that only shows one row. -->
                         <DockPanel x:Name="ColumnValuesPanel">
-                            <TextBlock DockPanel.Dock="Top" Text="OR PICK FROM VALUES" FontSize="10" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
-                            <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
-                                <TextBox x:Name="ColumnFilterSearchBox" TextChanged="OnColumnFilterSearchChanged"
-                                         AutomationProperties.Name="Search values"
-                                         ToolTip="Narrows the list below. Select all / Deselect all then apply to just what the search leaves showing." />
-                                <TextBlock Text="Search values…" Foreground="{DynamicResource TextSecondaryBrush}"
-                                           Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnFilterSearchBox}" Value="0">
-                                                    <Setter Property="Visibility" Value="Visible" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </Grid>
-                            <!-- "Deselect all" rather than "Clear": it already unticked everything, but
-                                 next to a "Clear sort" button "Clear" reads as "clear the filter", which
-                                 is the opposite of what ticking nothing then applying does. Both buttons
-                                 act on whatever the search above leaves showing, which is why they say so. -->
-                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick"
-                                        ToolTip="Tick every value currently listed" />
-                                <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick"
-                                        ToolTip="Untick every value currently listed" />
-                            </StackPanel>
-                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                                 <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
                                 <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
                             </StackPanel>
-                            <!-- Shown from the moment the popup opens until the (background) distinct-value
-                                 lookup finishes — the popup is fully open and interactive immediately, it
-                                 just doesn't have values to show yet, instead of freezing until it does. -->
-                            <TextBlock x:Name="ColumnFilterLoadingText" DockPanel.Dock="Top" Text="Loading values…" FontSize="12"
-                                       FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
-                            <!-- Shown when the column has more distinct values than the lookup collects, so a
-                                 partial list is never presented as the complete set. -->
-                            <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="11"
-                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or match by text instead."
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <ItemsControl x:Name="ColumnFilterValuesList">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}" />
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                <StackPanel>
+                                    <TextBlock Text="OR PICK FROM VALUES" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,5" />
+                                    <Grid Margin="0,0,0,8">
+                                        <TextBox x:Name="ColumnFilterSearchBox" TextChanged="OnColumnFilterSearchChanged"
+                                                 AutomationProperties.Name="Search values"
+                                                 ToolTip="Narrows the list below. Select all / Deselect all then apply to just what the search leaves showing." />
+                                        <TextBlock Text="Search values…" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnFilterSearchBox}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                    <!-- "Deselect all" rather than "Clear": it already unticked everything, but
+                                         next to a "Clear sort" button "Clear" reads as "clear the filter", which
+                                         is the opposite of what ticking nothing then applying does. Both buttons
+                                         act on whatever the search above leaves showing, which is why they say so. -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick"
+                                                ToolTip="Tick every value currently listed" />
+                                        <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick"
+                                                ToolTip="Untick every value currently listed" />
+                                    </StackPanel>
+                                    <!-- Shown from the moment the popup opens until the (background) distinct-value
+                                         lookup finishes — the popup is fully open and interactive immediately, it
+                                         just doesn't have values to show yet, instead of freezing until it does. -->
+                                    <TextBlock x:Name="ColumnFilterLoadingText" Text="Loading values…" FontSize="12"
+                                               FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
+                                    <!-- Shown when the column has more distinct values than the lookup collects, so a
+                                         partial list is never presented as the complete set. Short and single-line by
+                                         design (ellipsis + tooltip carry the rest) — the full sentence this used to be
+                                         cost 3-4 wrapped lines on its own, which was most of the squeeze above. -->
+                                    <TextBlock x:Name="ColumnFilterTruncatedText" FontSize="11" TextTrimming="CharacterEllipsis"
+                                               Text="Too many values to list — search above, or match by text."
+                                               ToolTip="This column has more distinct values than can be listed. Narrow the list with the search box above, or switch to matching by text instead."
+                                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
+                                    <ItemsControl x:Name="ColumnFilterValuesList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsSelected}" Style="{StaticResource FilterValueCheckBoxStyle}" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                             </ScrollViewer>
                         </DockPanel>
 
