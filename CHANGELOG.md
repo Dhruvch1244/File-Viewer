@@ -3,11 +3,13 @@
 Notable changes per release. Versions follow [semantic versioning](https://semver.org); the release
 workflow publishes a `win-x64` build when a `v*.*.*` tag is pushed.
 
-## 0.1.0 — first release
+This file starts at 0.1.5; releases 0.0.1 through 0.1.4 predate it and have no entries here.
+
+## 0.1.5
 
 The app opens, browses, edits and exports Bloomberg DIF/GETDATA files up to 2 GB, keeping the whole
 file off the managed heap: an unmanaged row index, an LRU decoded-row cache, and a grid that only
-ever builds the rows on screen.
+ever builds the rows on screen. Everything below arrived in this release.
 
 ### Reading files
 

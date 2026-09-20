@@ -185,8 +185,8 @@ dotnet publish src/FileViewer.App -c Release -r win-x64 -o publish/FileViewer-wi
   `v*.*.*`:
 
   ```
-  git tag v0.1.0
-  git push origin v0.1.0
+  git tag v0.1.5
+  git push origin v0.1.5
   ```
 
   or manually from the Actions tab (`Release` → `Run workflow`) against any branch, if you want a
