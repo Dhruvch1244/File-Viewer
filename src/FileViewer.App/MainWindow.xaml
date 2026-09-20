@@ -847,7 +847,7 @@
              actually holds — distinct count, blanks, extremes, and the numeric totals when the values
              are numbers. The summary answers "is this column worth filtering on" before you filter. -->
         <Popup x:Name="ColumnFilterPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True" Opened="OnPopupOpened">
-            <!-- Width/MaxHeight were 268/440 -- enough chrome sits above the value list (mode
+            <!-- Width/MaxHeight were 268/440 — enough chrome sits above the value list (mode
                  buttons, sort row, the whole "match by text" block) that at 440 the list itself
                  was down to one visible row before Cancel/Apply, with no way to tell there was
                  more to scroll to. 560 leaves comfortable room on any window this app can be
@@ -955,21 +955,21 @@
                                        FontStyle="Italic" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
                             <!-- Shown when the column has more distinct values than the lookup collects, so a
                                  partial list is never presented as the complete set. Kept to one line
-                                 (was a full sentence wrapping to three) -- it was costing the value list
+                                 (was a full sentence wrapping to three) — it was costing the value list
                                  itself almost as much vertical room as the thing it was explaining. -->
                             <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="10.5"
                                        Text="Showing the first values only — search or match by text for more."
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,6" Visibility="Collapsed" />
                             <!-- MinHeight guarantees several rows stay visible and scrollable no matter how
                                  much the rest of the popup (sort row, match-by-text, truncation notice)
-                                 needs above it -- previously this could be squeezed down to a single row
+                                 needs above it — previously this could be squeezed down to a single row
                                  with no visual cue there was more to scroll to. -->
                             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MinHeight="170">
                                 <ItemsControl x:Name="ColumnFilterValuesList">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <!-- A plain string Content has nothing to stop a long value running past
-                                                 the popup's edge -- this had no visible truncation at all before, so
+                                                 the popup's edge — this had no visible truncation at all before, so
                                                  a long company name or the "very long value" sample in
                                                  40-datatypes-mixed.dif just overflowed. TextTrimming ellipsizes it;
                                                  the tooltip still shows the whole thing. -->
