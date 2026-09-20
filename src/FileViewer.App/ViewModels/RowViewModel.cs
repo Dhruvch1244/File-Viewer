@@ -27,6 +27,9 @@ public sealed class RowViewModel(
 
     public long RowIndex => rowIndex;
 
+    /// <summary>Whether this row was resolved against <paramref name="other"/> — how the grid rejects a row that belongs to a different tab (see <see cref="GridViewModel.SelectedRow"/>).</summary>
+    public bool BelongsTo(FileViewerSession other) => ReferenceEquals(session, other);
+
     /// <summary>Whether this row is checked for bulk actions — backed by <see cref="RowSelectionState"/>, not this (short-lived, per-page) instance, so the check survives paging.</summary>
     public bool IsSelected
     {

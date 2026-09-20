@@ -161,6 +161,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             Tabs.Add(tab);
             OnPropertyChanged(nameof(HasFileOpen));
 
+            RetitleTabs();
+
             _settings.RememberRecentFile(path);
             _settings.Save();
             RefreshRecentFiles();
@@ -236,6 +238,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             FileViewerSession session = await FileViewerSession.OpenSectionAsync(
                 tab.FilePath, tab.Layout, section.Index, progress: progress);
 
+            // The tab can be closed while its section is still being indexed; handing the finished
+            // session to a disposed tab would leak the file handle and show a grid for a file that
+            // is no longer open.
+            if (!Tabs.Contains(tab))
+            {
+                session.Dispose();
+                return;
+            }
+
             section.Attach(session);
             tab.ActiveSection = section;
             tab.NotifyGridChanged();
@@ -254,6 +265,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             IsIndexing = false;
             IndexingProgressPercent = 0;
+        }
+    }
+
+    /// <summary>
+    /// Gives every tab the shortest label that still identifies it: the file name on its own, or
+    /// "folder\\name" when another open tab has the same file name.
+    /// </summary>
+    private void RetitleTabs()
+    {
+        foreach (FileTabViewModel tab in Tabs)
+        {
+            bool nameIsAmbiguous = Tabs.Any(other =>
+                !ReferenceEquals(other, tab) && string.Equals(other.FileName, tab.FileName, StringComparison.OrdinalIgnoreCase));
+
+            tab.Title = nameIsAmbiguous && tab.ParentFolderName.Length > 0
+                ? Path.Combine(tab.ParentFolderName, tab.FileName)
+                : tab.FileName;
         }
     }
 
@@ -295,6 +323,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         tab.Dispose();
+        RetitleTabs();
         OnPropertyChanged(nameof(HasFileOpen));
         OnPropertyChanged(nameof(Grid));
 

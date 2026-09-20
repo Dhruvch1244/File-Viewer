@@ -265,6 +265,17 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         Invalidate();
     }
 
+    /// <summary>
+    /// The row view model at an absolute position in the current row order, or null if that position
+    /// isn't on the page currently exposed. Used by match navigation, which turns to the right page
+    /// first and then asks for the row so it can be selected.
+    /// </summary>
+    public RowViewModel? GetRowAtPosition(int position)
+    {
+        int offset = position - (_pageIndex * PageSize);
+        return offset >= 0 && offset < Count ? RowAtPageOffset(offset) : null;
+    }
+
     /// <summary>Every row index currently matching the active search/column filters, across every page — the full set "select all" should act on, not just the page currently on screen.</summary>
     public IReadOnlyList<long> GetAllRowIndices() => EffectiveOrder;
 

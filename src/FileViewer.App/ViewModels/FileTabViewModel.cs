@@ -17,19 +17,28 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
 {
     private FileSectionViewModel? _activeSection;
     private bool _isActive;
+    private string _title;
 
     public FileTabViewModel(string filePath, DifFileLayout layout)
     {
         FilePath = filePath;
         Layout = layout;
-        Title = Path.GetFileName(filePath);
+        _title = Path.GetFileName(filePath);
         Sections = new ObservableCollection<FileSectionViewModel>(layout.Sections.Select(section => new FileSectionViewModel(section)));
     }
 
     public string FilePath { get; }
 
-    /// <summary>File name only — the tab's label. The full path is the tooltip.</summary>
-    public string Title { get; }
+    /// <summary>
+    /// The tab's label: the file name, or "folder\\name" when another open tab has the same file
+    /// name. Dated exports routinely share a name and differ only by folder, and two tabs reading
+    /// "holdings.dif" tell you nothing. The full path is always the tooltip.
+    /// </summary>
+    public string Title
+    {
+        get => _title;
+        internal set => SetField(ref _title, value);
+    }
 
     public DifFileLayout Layout { get; }
 
@@ -63,6 +72,11 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
     }
 
     public GridViewModel? Grid => ActiveSection?.Grid;
+
+    /// <summary>The file name alone, and the folder holding it — the two halves a disambiguated title is built from.</summary>
+    internal string FileName => Path.GetFileName(FilePath);
+
+    internal string ParentFolderName => Path.GetFileName(Path.GetDirectoryName(FilePath) ?? string.Empty);
 
     /// <summary>Raised when the active section finishes loading, so the window can rebuild its columns for the new grid.</summary>
     internal void NotifyGridChanged() => OnPropertyChanged(nameof(Grid));

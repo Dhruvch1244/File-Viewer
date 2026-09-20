@@ -63,6 +63,7 @@ public sealed class GridViewModel : ObservableObject
             OnPropertyChanged(nameof(CanGoToNextPage));
             OnPropertyChanged(nameof(MatchCount));
             OnPropertyChanged(nameof(HasMatches));
+            OnPropertyChanged(nameof(HasHighlight));
             OnPropertyChanged(nameof(MatchLabel));
             RebuildActiveFilterChips();
         };
@@ -138,11 +139,28 @@ public sealed class GridViewModel : ObservableObject
         set => SetField(ref _frozenColumnCount, Math.Clamp(value, 0, ColumnNames.Count));
     }
 
+    /// <summary>
+    /// The row the DataGrid has focused. Rows from another tab are rejected: switching tabs
+    /// re-points the grid's two-way SelectedItem binding while the outgoing selection is still being
+    /// torn down, so without this guard tab B could end up holding a row that resolves against tab
+    /// A's session — and "Duplicate" would then copy a row out of the wrong file.
+    /// </summary>
     public RowViewModel? SelectedRow
     {
         get => _selectedRow;
-        set => SetField(ref _selectedRow, value);
+        set
+        {
+            if (value is not null && !value.BelongsTo(Session)) return;
+            SetField(ref _selectedRow, value);
+        }
     }
+
+    /// <summary>
+    /// Column widths and left-to-right order, by column name. The window rebuilds the DataGrid's
+    /// columns from scratch every time it switches to a different grid, so anything the user did to
+    /// them — dragging a width, reordering — lives here instead of on the (discarded) columns.
+    /// </summary>
+    public Dictionary<string, ColumnLayout> ColumnLayouts { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Which rows are checked for bulk actions (Delete) — survives paging/sorting/filtering; see <see cref="RowSelectionState"/>.</summary>
     public RowSelectionState Selection { get; } = new();
@@ -161,7 +179,17 @@ public sealed class GridViewModel : ObservableObject
         get => _searchText;
         set
         {
-            if (SetField(ref _searchText, value)) CommandManager.InvalidateRequerySuggested();
+            bool wasEmpty = string.IsNullOrEmpty(_searchText);
+            if (!SetField(ref _searchText, value)) return;
+
+            // Only "+ Add term" depends on this, and only on whether the box is empty — so requery
+            // on that transition alone. Doing it per keystroke re-evaluated CanExecute for every
+            // command binding in the window (a page of grid rows included), which is what made
+            // typing in the search box stutter on a large file.
+            if (wasEmpty != string.IsNullOrEmpty(_searchText))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
         }
     }
 
@@ -240,6 +268,16 @@ public sealed class GridViewModel : ObservableObject
 
     public string SearchModeLabel => HighlightInsteadOfFilter ? "Highlight" : "Filter";
 
+    /// <summary>
+    /// Raised when match navigation moves to a row, so the view can scroll it into sight. An event
+    /// rather than a property change on <see cref="SelectedRow"/>: only navigation should steal the
+    /// scroll position, not an ordinary click on a row.
+    /// </summary>
+    public event Action<RowViewModel>? MatchFocused;
+
+    /// <summary>True while a highlight query is active — what makes the match count and ‹ › navigation appear (including when the answer is "no matches").</summary>
+    public bool HasHighlight => Rows.HasHighlight;
+
     /// <summary>How many rows the highlight query matches — 0 when highlighting is off.</summary>
     public int MatchCount => Rows.MatchPositions.Count;
 
@@ -265,7 +303,17 @@ public sealed class GridViewModel : ObservableObject
             ? (direction >= 0 ? 0 : positions.Count - 1)
             : ((_currentMatchOrdinal + direction) % positions.Count + positions.Count) % positions.Count;
 
-        Rows.GoToPage(positions[_currentMatchOrdinal] / Rows.PageSize);
+        int position = positions[_currentMatchOrdinal];
+        Rows.GoToPage(position / Rows.PageSize);
+
+        // Turning to the page isn't enough on its own: with several matches on one page, "next"
+        // would look like nothing happened. Selecting the row is what actually points at it.
+        if (Rows.GetRowAtPosition(position) is { } row)
+        {
+            SelectedRow = row;
+            MatchFocused?.Invoke(row);
+        }
+
         OnPropertyChanged(nameof(MatchLabel));
     }
 
@@ -520,6 +568,11 @@ public sealed class GridViewModel : ObservableObject
         Rows.Invalidate();
     }
 }
+
+/// <summary>A column's remembered on-screen size and position — see <see cref="GridViewModel.ColumnLayouts"/>.</summary>
+/// <param name="Width">Rendered width in pixels, or 0 if it was never measured.</param>
+/// <param name="DisplayIndex">Position among the visible columns, or -1 if unknown.</param>
+public readonly record struct ColumnLayout(double Width, int DisplayIndex);
 
 /// <summary>One entry in <see cref="GridViewModel.ActiveFilterChips"/> — a human-readable description of an active filter, plus the command that clears just that one filter.</summary>
 public sealed class ActiveFilterChip(string label, Func<Task> remove)

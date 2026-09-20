@@ -223,6 +223,16 @@ public partial class MainWindow : Window
         await _viewModel.ActivateTabAsync(tab);
     }
 
+    /// <summary>Middle-click closes a tab, the way it does in every other tabbed app.</summary>
+    private void OnTabMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        if (sender is not FrameworkElement { DataContext: FileTabViewModel tab }) return;
+
+        e.Handled = true;
+        _viewModel.CloseTab(tab);
+    }
+
     /// <summary>Section bar (bulk files): switches the active tab to one of its DATA= sections, indexing it on first use.</summary>
     private async void OnSectionChipClick(object sender, RoutedEventArgs e)
     {
@@ -456,7 +466,20 @@ public partial class MainWindow : Window
                 // GridColumnInfo.IsVisible's initial value (e.g. the "only first 20 by default" rule).
                 Visibility = definition.IsVisible ? Visibility.Visible : Visibility.Collapsed,
             };
+            // Put back whatever width/position this column had the last time this grid was shown.
+            if (grid.ColumnLayouts.TryGetValue(columnName, out ColumnLayout layout) && layout.Width > 0)
+            {
+                column.Width = new DataGridLength(layout.Width);
+            }
+
             RowsDataGrid.Columns.Add(column);
+
+            // A column filtered before the user switched away is still filtered — the header has to
+            // say so again, since this header was just rebuilt from scratch.
+            if (grid.Rows.HasColumnValueFilter(columnName))
+            {
+                UpdateColumnHeaderText(columnName, isFiltered: true);
+            }
 
             void OnDefinitionPropertyChanged(object? _, PropertyChangedEventArgs args)
             {
@@ -469,6 +492,8 @@ public partial class MainWindow : Window
             definition.PropertyChanged += OnDefinitionPropertyChanged;
             _wiredColumnDefinitions.Add((definition, OnDefinitionPropertyChanged));
         }
+
+        RestoreColumnOrder(grid);
 
         // The select-checkbox and view-button columns are always frozen in addition to however
         // many data columns the user asks to freeze — you always want them visible.
@@ -493,16 +518,37 @@ public partial class MainWindow : Window
         }
 
         grid.PropertyChanged += OnGridPropertyChanged;
+        grid.MatchFocused += OnMatchFocused;
         _wiredGrid = grid;
         _wiredGridHandler = OnGridPropertyChanged;
     }
 
-    /// <summary>Unhooks everything <see cref="RebuildColumns"/> wired up for the previously-shown grid.</summary>
+    /// <summary>Scrolls a row found by match navigation (F3 / ‹ ›) into view.</summary>
+    private void OnMatchFocused(RowViewModel row) => RowsDataGrid.ScrollIntoView(row);
+
+    /// <summary>
+    /// Unhooks everything <see cref="RebuildColumns"/> wired up for the previously-shown grid, and
+    /// saves what the user had done to its columns first — the DataGrid's own column objects are
+    /// thrown away on every switch, so widths and ordering would otherwise reset each time you came
+    /// back to a tab.
+    /// </summary>
     private void DetachColumnWiring()
     {
+        if (_wiredGrid is not null)
+        {
+            foreach (DataGridColumn column in RowsDataGrid.Columns)
+            {
+                if (column.Header is Grid { Children: [TextBlock, ..] } && column is DataGridTextColumn { SortMemberPath: { Length: > 0 } name })
+                {
+                    _wiredGrid.ColumnLayouts[name] = new ColumnLayout(column.ActualWidth, column.DisplayIndex);
+                }
+            }
+        }
+
         if (_wiredGrid is not null && _wiredGridHandler is not null)
         {
             _wiredGrid.PropertyChanged -= _wiredGridHandler;
+            _wiredGrid.MatchFocused -= OnMatchFocused;
         }
         _wiredGrid = null;
         _wiredGridHandler = null;
@@ -533,6 +579,25 @@ public partial class MainWindow : Window
         trigger.Setters.Add(new Setter(ForegroundProperty, new DynamicResourceExtension("SearchHighlightTextBrush")));
         style.Triggers.Add(trigger);
         return style;
+    }
+
+    /// <summary>
+    /// Re-applies a remembered left-to-right column order. Done after every column exists (setting
+    /// DisplayIndex shuffles the others, so it can't be done while still adding them), and in
+    /// ascending order of the remembered index so each assignment lands where it was.
+    /// </summary>
+    private void RestoreColumnOrder(GridViewModel grid)
+    {
+        if (grid.ColumnLayouts.Count == 0) return;
+
+        foreach ((string columnName, ColumnLayout layout) in grid.ColumnLayouts.OrderBy(entry => entry.Value.DisplayIndex))
+        {
+            if (layout.DisplayIndex < 0 || layout.DisplayIndex >= RowsDataGrid.Columns.Count) continue;
+
+            DataGridColumn? column = RowsDataGrid.Columns
+                .FirstOrDefault(c => c is DataGridTextColumn { SortMemberPath: { } path } && path == columnName);
+            if (column is not null) column.DisplayIndex = layout.DisplayIndex;
+        }
     }
 
     private static string HeaderTextFor(string columnName, bool isFiltered) =>

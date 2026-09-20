@@ -88,7 +88,7 @@
 
         <!-- One open file in the tab strip: click the label to bring it forward, ✕ to close it. -->
         <DataTemplate x:Key="FileTabTemplate">
-            <Border Margin="0,0,6,0" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0">
+            <Border Margin="0,0,6,0" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0" MouseDown="OnTabMouseDown">
                 <Border.Style>
                     <Style TargetType="Border">
                         <Setter Property="Background" Value="Transparent" />
@@ -284,75 +284,80 @@
             </Border>
 
             <!-- ============================== Search bar ============================= -->
-            <!-- One term at a time is typed here; "Find" replaces the search with it, "+ Add term"
-                 keeps the existing terms and adds this one. Each term carries its own scope (all
-                 columns, or one), comparison and case sensitivity, and the terms are combined with
-                 the match-all/match-any toggle. Every active term shows as a removable chip below. -->
+            <!-- One term at a time is typed here; "Find" searches with just that term, "+ Add term"
+                 keeps the terms already applied and adds this one. Each term carries its own scope
+                 (all columns, or one), comparison and case sensitivity, and the terms combine with
+                 the match-all/match-any toggle. Every active term shows as a removable chip below.
+
+                 Laid out as a WrapPanel, not a DockPanel: there are enough controls here that at a
+                 normal window width a docked layout squeezed the dropdowns and the text box out of
+                 view entirely. Wrapping puts them on a second line instead of clipping them, and the
+                 widths below are minimums rather than fixed sizes so the row degrades gracefully. -->
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
                     Visibility="{Binding HasFileOpen, Converter={StaticResource BoolToVisibilityConverter}}">
-                <DockPanel Margin="16,8">
-                    <TextBlock DockPanel.Dock="Left" Text="SEARCH" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                <WrapPanel Orientation="Horizontal" Margin="16,8,16,4">
+                    <TextBlock Text="SEARCH" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,4" />
 
-                    <Button DockPanel.Dock="Right" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6" Margin="6,0,0,0"
-                            Command="{Binding Grid.ClearSearchCommand}" Content="✕" ToolTip="Clear the search" />
-                    <Button DockPanel.Dock="Right" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="6,0,0,0"
-                            Command="{Binding Grid.AddSearchTermCommand}" Content="+ Add term"
-                            ToolTip="Keep the terms already applied and add this one as well" />
-                    <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButtonStyle}" Padding="14,6" Margin="6,0,0,0"
+                    <ComboBox MinWidth="130" MaxWidth="190" VerticalAlignment="Center" Margin="0,0,6,4"
+                              ItemsSource="{Binding Grid.SearchColumns}" SelectedItem="{Binding Grid.SearchColumn}"
+                              ToolTip="Which column this term applies to" AutomationProperties.Name="Search scope" />
+                    <ComboBox MinWidth="125" VerticalAlignment="Center" Margin="0,0,6,4"
+                              ItemsSource="{Binding Grid.SearchModes}" SelectedItem="{Binding Grid.SearchMode}"
+                              ToolTip="How this term is compared" AutomationProperties.Name="Search comparison" />
+
+                    <Grid MinWidth="180" Width="230" VerticalAlignment="Center" Margin="0,0,6,4">
+                        <TextBox x:Name="SearchTextBox"
+                                 Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 KeyDown="OnSearchTextBoxKeyDown" AutomationProperties.Name="Search text" />
+                        <TextBlock Text="Search…  (Ctrl+F)" Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Grid.SearchText.Length}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <Button Style="{StaticResource PrimaryButtonStyle}" Padding="14,6" Margin="0,0,6,4"
                             Command="{Binding Grid.ApplySearchCommand}" Content="Find"
                             ToolTip="Search using only this term, replacing any terms already applied" />
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="0,0,6,4"
+                            Command="{Binding Grid.AddSearchTermCommand}" Content="+ Add term"
+                            ToolTip="Keep the terms already applied and add this one as well" />
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="8,6" Margin="0,0,10,4"
+                            Command="{Binding Grid.ClearSearchCommand}" Content="✕" ToolTip="Clear the search" />
 
-                    <!-- Filter vs highlight: filtering hides what doesn't match, highlighting keeps every
-                         row and marks the matching cells, with ‹ › to step between them. -->
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0"
-                                Visibility="{Binding Grid.HasMatches, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                    <CheckBox Content="Case" VerticalAlignment="Center" Margin="0,0,10,4"
+                              IsChecked="{Binding Grid.SearchCaseSensitive}" ToolTip="Match upper/lower case exactly" />
+
+                    <!-- Filter vs highlight: filtering hides what doesn't match, highlighting keeps
+                         every row and marks the matching cells, with ‹ › to step between them. -->
+                    <Button Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="0,0,6,4"
+                            Click="OnToggleSearchModeClick" Content="{Binding Grid.SearchModeLabel}"
+                            ToolTip="Switch between hiding rows that don't match and highlighting the ones that do" />
+
+                    <!-- Combine mode: only meaningful once more than one term is applied. -->
+                    <Button x:Name="CombineModeButton" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="0,0,6,4"
+                            Click="OnToggleCombineModeClick" Content="{Binding Grid.SearchCombineLabel}"
+                            ToolTip="Switch between requiring every term to match and requiring any one of them"
+                            Visibility="{Binding Grid.HasMultipleSearchTerms, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
+
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,4"
+                                Visibility="{Binding Grid.HasHighlight, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                        <TextBlock Text="{Binding Grid.MatchLabel}" VerticalAlignment="Center" Margin="4,0,6,0"
+                                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" />
                         <Button Content="‹" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6"
                                 Command="{Binding Grid.PreviousMatchCommand}" ToolTip="Previous match (Shift+F3)" />
                         <Button Content="›" Style="{StaticResource ToolbarButtonStyle}" Padding="8,6"
                                 Command="{Binding Grid.NextMatchCommand}" ToolTip="Next match (F3)" />
                     </StackPanel>
-                    <TextBlock DockPanel.Dock="Right" Text="{Binding Grid.MatchLabel}" VerticalAlignment="Center" Margin="10,0,0,0"
-                               FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    <Button DockPanel.Dock="Right" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="10,0,0,0"
-                            Click="OnToggleSearchModeClick" Content="{Binding Grid.SearchModeLabel}"
-                            ToolTip="Switch between hiding rows that don't match and highlighting the ones that do" />
-
-                    <!-- Combine mode: only meaningful once more than one term is applied. -->
-                    <Button DockPanel.Dock="Right" x:Name="CombineModeButton" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" Margin="10,0,0,0"
-                            Click="OnToggleCombineModeClick" Content="{Binding Grid.SearchCombineLabel}"
-                            ToolTip="Switch between requiring every term to match and requiring any one of them"
-                            Visibility="{Binding Grid.HasMultipleSearchTerms, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
-
-                    <CheckBox DockPanel.Dock="Right" Content="Case" VerticalAlignment="Center" Margin="10,0,0,0"
-                              IsChecked="{Binding Grid.SearchCaseSensitive}" ToolTip="Match upper/lower case exactly" />
-
-                    <StackPanel Orientation="Horizontal">
-                        <ComboBox Width="150" VerticalAlignment="Center" Margin="0,0,6,0"
-                                  ItemsSource="{Binding Grid.SearchColumns}" SelectedItem="{Binding Grid.SearchColumn}"
-                                  ToolTip="Which column this term applies to" AutomationProperties.Name="Search scope" />
-                        <ComboBox Width="140" VerticalAlignment="Center" Margin="0,0,6,0"
-                                  ItemsSource="{Binding Grid.SearchModes}" SelectedItem="{Binding Grid.SearchMode}"
-                                  ToolTip="How this term is compared" AutomationProperties.Name="Search comparison" />
-                        <Grid Width="240" VerticalAlignment="Center">
-                            <TextBox x:Name="SearchTextBox"
-                                     Text="{Binding Grid.SearchText, UpdateSourceTrigger=PropertyChanged}"
-                                     KeyDown="OnSearchTextBoxKeyDown" AutomationProperties.Name="Search text" />
-                            <TextBlock Text="Search…" Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Grid.SearchText.Length}" Value="0">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
-                    </StackPanel>
-                </DockPanel>
+                </WrapPanel>
             </Border>
 
             <!-- ============================== Active filters summary ================== -->
