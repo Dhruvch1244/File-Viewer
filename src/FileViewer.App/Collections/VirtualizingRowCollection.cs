@@ -45,7 +45,10 @@ namespace FileViewer.App.Collections;
 /// window) while a filter is scanning a multi-gigabyte file stops that scan then and there, instead
 /// of leaving it to finish a computation whose result nothing will ever read.
 /// </summary>
-public sealed class VirtualizingRowCollection(FileViewerSession session, RowSelectionState selection) : IList, INotifyCollectionChanged, IDisposable
+public sealed class VirtualizingRowCollection(
+    FileViewerSession session,
+    RowSelectionState selection,
+    IReadOnlyList<long>? restrictedRows = null) : IList, INotifyCollectionChanged, IDisposable
 {
     /// <summary>Rows-per-page before MainWindow has had a chance to measure the DataGrid's actual visible height and call <see cref="SetPageSize"/> — a starting point now, not a hard limit.</summary>
     public const int DefaultPageSize = 20;
@@ -152,8 +155,23 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         return RowQueryEngine.Filter(candidates, predicates, session.FileIndex, session.Overlay, session.Cache, cancellationToken);
     }
 
+    /// <summary>
+    /// The rows this view starts from, before any filter or search — normally the whole section,
+    /// but a fixed set for an extracted view (see <see cref="ViewModels.GridViewModel.IsExtractedView"/>).
+    /// Public so the sort path can work from the same starting point rather than re-deriving it from
+    /// the session and quietly pulling in rows this view never contained.
+    /// </summary>
+    public IReadOnlyList<long> GetBaseRowOrder() => BuildBaseOrder();
+
     private List<long> BuildBaseOrder()
     {
+        if (restrictedRows is not null)
+        {
+            // An extracted view is exactly these rows. Added/duplicated rows belong to whichever
+            // view created them, so they are not pulled in here.
+            return [.. _customOrderOverride ?? [.. restrictedRows]];
+        }
+
         if (_customOrderOverride is not null)
         {
             // A generic (non-"_ID") column-header sort was applied — it already reflects the full

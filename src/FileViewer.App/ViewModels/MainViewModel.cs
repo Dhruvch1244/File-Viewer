@@ -26,6 +26,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AppSettings _settings = AppSettings.Load();
     private CancellationTokenSource? _indexingCts;
+    private readonly Action<AppTheme> _themeChangedHandler;
     private FileTabViewModel? _activeTab;
     private string _statusMessage = "No file open.";
     private double _indexingProgressPercent;
@@ -47,12 +48,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         IsDarkTheme = ThemeManager.Current == AppTheme.Dark;
 
-        ThemeManager.ThemeChanged += theme =>
+        // Held in a field so it can come off again: ThemeManager's event is static, and with more
+        // than one window open a handler that is never removed keeps a closed window's view model
+        // alive for the life of the process.
+        _themeChangedHandler = theme =>
         {
             IsDarkTheme = theme == AppTheme.Dark;
             _settings.Theme = theme.ToString();
             _settings.Save();
         };
+        ThemeManager.ThemeChanged += _themeChangedHandler;
 
         Preferences.PageSize = PageSizeOption.FromSetting(_settings.RowsPerPage);
         Preferences.PropertyChanged += (_, args) =>
@@ -330,6 +335,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         foreach (FileTabViewModel tab in Tabs)
         {
+            if (tab.IsExtract) continue; // its title already says what it is
+
             bool nameIsAmbiguous = Tabs.Any(other =>
                 !ReferenceEquals(other, tab) && string.Equals(other.FileName, tab.FileName, StringComparison.OrdinalIgnoreCase));
 
@@ -360,6 +367,34 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await ActivateTabAsync(Tabs[next]);
     }
 
+    /// <summary>
+    /// Pulls the selected rows out into their own view: same file, same columns, same edits, just
+    /// those rows — with its own filters, search, sort and column layout. The point is to be able to
+    /// narrow to a set of records and then keep working on them without the rest of the file getting
+    /// in the way, including narrowing again inside it.
+    ///
+    /// It shares the source view's index and overlay rather than re-indexing the file, which is what
+    /// makes it instant; the cost is that it closes when the file it came from does.
+    /// </summary>
+    public async Task ExtractSelectionAsync()
+    {
+        if (ActiveTab is not { } tab || tab.ActiveSection is not { Grid: { } grid } section) return;
+
+        long[] rows = [.. grid.Selection.Resolve(grid.Rows.GetAllRowIndices())];
+        if (rows.Length == 0)
+        {
+            StatusMessage = "Nothing selected — tick the rows you want first.";
+            return;
+        }
+
+        FileTabViewModel extract = FileTabViewModel.CreateExtract(tab, section, grid.Session, rows, Preferences);
+        Tabs.Add(extract);
+        OnPropertyChanged(nameof(HasFileOpen));
+
+        await ActivateTabAsync(extract);
+        StatusMessage = $"Pulled {rows.Length:N0} row(s) into their own view.";
+    }
+
     /// <summary>Closes whichever tab is on screen — Ctrl+W.</summary>
     public void CloseActiveTab() => CloseTab(ActiveTab);
 
@@ -381,6 +416,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Edits live in the overlay until they are exported, so closing throws them away. Say so
         // rather than doing it silently.
         if (tab.HasUnsavedEdits && ConfirmDiscardingEdits?.Invoke(tab) == false) return;
+
+        // Views pulled out of this one read through its session, so they cannot outlive it.
+        foreach (FileTabViewModel extract in tab.Extracts.ToList())
+        {
+            CloseTab(extract);
+        }
+        tab.ExtractedFrom?.Extracts.Remove(tab);
 
         int closedIndex = Tabs.IndexOf(tab);
         Tabs.Remove(tab);
@@ -419,7 +461,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
-        foreach (FileTabViewModel tab in Tabs)
+        ThemeManager.ThemeChanged -= _themeChangedHandler;
+        _indexingCts?.Cancel();
+        _indexingCts?.Dispose();
+        _indexingCts = null;
+
+        // Extracted views share the session of the tab they came from, so they have to go first —
+        // disposing a source while one still reads through it would leave it pointing at a closed file.
+        foreach (FileTabViewModel tab in Tabs.OrderByDescending(tab => tab.IsExtract))
         {
             tab.Dispose();
         }

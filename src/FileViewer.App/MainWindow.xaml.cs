@@ -333,6 +333,15 @@ public partial class MainWindow : Window
 
     private void OnCancelFilterClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.CancelFilter();
 
+    /// <summary>Pulls the ticked rows out into a view of their own.</summary>
+    private async void OnExtractSelectionClick(object sender, RoutedEventArgs e) => await _viewModel.ExtractSelectionAsync();
+
+    /// <summary>
+    /// Opens a second, independent window — its own files, its own tabs. For comparing two files
+    /// side by side on one screen, which tabs in a single window can't do.
+    /// </summary>
+    private void OnNewWindowClick(object sender, RoutedEventArgs e) => new MainWindow().Show();
+
     private void OnShowHiddenMatchColumnsClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.ShowHiddenMatchColumns();
 
     /// <summary>Opens the file-info panel, filling it from whatever file is on screen right now.</summary>

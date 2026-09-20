@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using FileViewer.App.Common;
 using FileViewer.Core.Dif;
+using FileViewer.Core.Session;
 
 namespace FileViewer.App.ViewModels;
 
@@ -19,12 +20,40 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
     private bool _isActive;
     private string _title;
 
-    public FileTabViewModel(string filePath, DifFileLayout layout, GridPreferences preferences)
+    /// <summary>
+    /// Builds a tab holding rows pulled out of <paramref name="source"/>: the same file and columns,
+    /// a fixed set of rows, and its own filters, search, sort and column layout. It shares the
+    /// source's index and edit overlay — an edit here is an edit to the same file — so it lives only
+    /// as long as the view it came from.
+    /// </summary>
+    public static FileTabViewModel CreateExtract(
+        FileTabViewModel source,
+        FileSectionViewModel sourceSection,
+        FileViewerSession sharedSession,
+        IReadOnlyList<long> rows,
+        GridPreferences preferences)
+    {
+        var tab = new FileTabViewModel(source.FilePath, source.Layout, preferences, singleSection: sourceSection.Index)
+        {
+            ExtractedFrom = source,
+            _title = $"{Path.GetFileName(source.FilePath)} · {rows.Count:N0} row(s)",
+        };
+
+        tab.Sections[0].AttachExtractedRows(sharedSession, rows);
+        tab.ActiveSection = tab.Sections[0];
+        source.Extracts.Add(tab);
+        return tab;
+    }
+
+    public FileTabViewModel(string filePath, DifFileLayout layout, GridPreferences preferences, int? singleSection = null)
     {
         FilePath = filePath;
         Layout = layout;
         _title = Path.GetFileName(filePath);
-        Sections = new ObservableCollection<FileSectionViewModel>(layout.Sections.Select(section => new FileSectionViewModel(section, preferences)));
+        IEnumerable<DifSection> sections = singleSection is int only
+            ? [layout.Sections[only]]
+            : layout.Sections;
+        Sections = new ObservableCollection<FileSectionViewModel>(sections.Select(section => new FileSectionViewModel(section, preferences)));
     }
 
     public string FilePath { get; }
@@ -73,8 +102,21 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
 
     public GridViewModel? Grid => ActiveSection?.Grid;
 
-    /// <summary>True if any section of this file holds edits that have not been exported anywhere.</summary>
-    public bool HasUnsavedEdits => Sections.Any(section => section.Grid?.Session.HasPendingEdits == true);
+    /// <summary>
+    /// True if any section of this file holds edits that have not been exported anywhere. Always
+    /// false for an extracted view: its edits belong to the file it was pulled out of and survive
+    /// its closing, so there is nothing to warn about.
+    /// </summary>
+    public bool HasUnsavedEdits =>
+        !IsExtract && Sections.Any(section => section.Grid?.Session.HasPendingEdits == true);
+
+    /// <summary>The tab this one's rows were pulled out of, if any.</summary>
+    public FileTabViewModel? ExtractedFrom { get; private init; }
+
+    public bool IsExtract => ExtractedFrom is not null;
+
+    /// <summary>Views pulled out of this one. They share this tab's session, so they close when it does.</summary>
+    public List<FileTabViewModel> Extracts { get; } = [];
 
     /// <summary>The file name alone, and the folder holding it — the two halves a disambiguated title is built from.</summary>
     internal string FileName => Path.GetFileName(FilePath);

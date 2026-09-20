@@ -159,6 +159,8 @@
                 <DockPanel Margin="16,10">
                     <Button DockPanel.Dock="Right" x:Name="ExportButton" Content="Export" Style="{StaticResource PrimaryButtonStyle}" Click="OnExportButtonClick" Margin="12,0,0,0" />
                     <Button DockPanel.Dock="Right" x:Name="OpenButton" Content="Open File" Style="{StaticResource PrimaryButtonStyle}" Click="OnOpenFileClick" ToolTip="Open a file (Ctrl+O) — or drop one onto the window" />
+                    <Button DockPanel.Dock="Right" Content="New window" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,8,0"
+                            Click="OnNewWindowClick" ToolTip="Open a second window, for comparing files side by side" />
                     <Button DockPanel.Dock="Right" x:Name="RecentFilesButton" Content="Recent" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,8,0"
                             Click="OnRecentFilesButtonClick" IsEnabled="{Binding HasRecentFiles}" ToolTip="Files you opened recently" />
 
@@ -211,7 +213,9 @@
                                 <Button Content="Add" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.AddRowCommand}" />
                                 <Button Content="Duplicate" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DuplicateSelectedRowCommand}" />
                                 <Button Content="Delete" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.DeleteSelectedRowsCommand}" />
-                                <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" />
+                                <Button Content="Undo" Style="{StaticResource ToolbarButtonStyle}" Command="{Binding Grid.UndoCommand}" ToolTip="Undo the last edit or row change (Ctrl+Z)" />
+                                <Button Content="Extract" Style="{StaticResource ToolbarButtonStyle}" Click="OnExtractSelectionClick"
+                                        ToolTip="Pull the selected rows into their own view — same file and columns, just those rows, with its own filters and sort" />
                             </StackPanel>
                         </Border>
                         <TextBlock Text="{Binding Grid.SelectedCount, StringFormat='{}{0} selected'}" VerticalAlignment="Center"

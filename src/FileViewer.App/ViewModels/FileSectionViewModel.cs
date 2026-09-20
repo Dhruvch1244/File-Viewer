@@ -19,6 +19,7 @@ public sealed class FileSectionViewModel(DifSection section, GridPreferences pre
     private FileViewerSession? _session;
     private GridViewModel? _grid;
     private bool _isActive;
+    private bool _ownsSession = true;
 
     public int Index => section.Index;
 
@@ -52,15 +53,29 @@ public sealed class FileSectionViewModel(DifSection section, GridPreferences pre
     /// <summary>Takes ownership of the session indexed for this section and builds its grid.</summary>
     internal void Attach(FileViewerSession session)
     {
-        _session?.Dispose();
+        if (_ownsSession) _session?.Dispose();
         _session = session;
+        _ownsSession = true;
         Grid = new GridViewModel(session, preferences);
+    }
+
+    /// <summary>
+    /// Builds a section over rows pulled out of another view: the same file, the same columns, the
+    /// same edits — a fixed subset of the rows. The session belongs to the view it came from and is
+    /// deliberately not disposed here; the extracted view is closed when that one is.
+    /// </summary>
+    internal void AttachExtractedRows(FileViewerSession sharedSession, IReadOnlyList<long> rows)
+    {
+        if (_ownsSession) _session?.Dispose();
+        _session = sharedSession;
+        _ownsSession = false;
+        Grid = new GridViewModel(sharedSession, preferences, rows);
     }
 
     public void Dispose()
     {
         Grid?.Rows.Dispose();
-        _session?.Dispose();
+        if (_ownsSession) _session?.Dispose();
         _session = null;
         Grid = null;
     }

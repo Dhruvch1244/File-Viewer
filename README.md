@@ -15,11 +15,16 @@ virtualized scrolling instead of loading the whole file into memory.
   (non-GC-heap) row index and an LRU decoded-row cache. Filtering is a single parallel pass that
   evaluates every active filter at once — see [how it stays fast](#how-search-sort-and-filter-stay-fast).
 - **Inline editing with full undo.** Edit any cell, add/duplicate/delete rows, bulk-delete a
-  selection, and undo any of it — edits are tracked as an overlay on top of the original file, so
-  the source file is never mutated until you export.
-- **Excel-style column filtering, with a summary.** The column menu lists the distinct values
-  actually present in that column so you can filter by them without knowing them in advance — and a
-  **Stats** view next to it summarizes the column over the rows in view: how many rows have a value,
+  selection, and undo any of it — cell edits included, reversed in the order you made them. Edits
+  are tracked as an overlay on top of the original file, so the source file is never mutated until
+  you export; closing a file with edits that haven't been exported asks first rather than discarding
+  them silently.
+- **Nothing runs away with you.** Opening a file, filtering it and exporting it can all be stopped
+  mid-flight, and each reports progress while it runs.
+- **Excel-style column filtering, sorting, and a summary.** The column menu sorts the column either
+  way, filters it by text or regex, lists the distinct values
+  actually present in it so you can filter by them without knowing them in advance, and has a
+  **Stats** view that summarizes the column over the rows in view: how many rows have a value,
   how many are blank, how many distinct values there are, the extremes, and the sum and mean when
   the values are numbers. It answers "is this column worth filtering on" before you filter on it.
 - **Search with as many terms as you need.** Each term carries its own scope (all columns, or one
@@ -47,8 +52,19 @@ virtualized scrolling instead of loading the whole file into memory.
   only when it is asked for, so the page size was never a limit on what could be shown — only on
   what was. First/last page buttons and a "jump to page" box come with it, and the choice is
   remembered for the next file and the next run.
-- **Select at scale.** A "select all" that spans every row matching the current filters — not just
-  the rows currently on screen — so bulk actions act on the full result set.
+- **Select at scale, then pull the selection out.** "Select all" spans every row matching the
+  current filters — not just the rows on screen — and is stored as a rule rather than a list, so
+  selecting two million rows costs nothing. **Extract** then pulls whatever is selected into its own
+  view: same file, same columns, same edits, just those rows, with its own filters, search, sort and
+  column layout. Narrow to a set of records and keep working on them without the rest of the file in
+  the way — including narrowing again inside it. It shares the source view's index rather than
+  re-reading the file, which is what makes it instant; the trade is that it closes when the file it
+  came from does.
+- **A second window** when tabs aren't enough — independent files and tabs, for comparing two files
+  side by side.
+- **Copy to the clipboard.** Ctrl+C copies the selected rows (or the one you're on) as tab-separated
+  text with a header line, covering the visible columns in their current order — it pastes straight
+  into Excel.
 - **Multi-format export, scoped to what you mean.** DIF, CSV, TSV or JSON, with a live preview of the
   first rows. By default it writes exactly the rows the grid is showing — edits, sort and filters
   applied — or just the rows you have ticked, or (for a bulk file) every section at once as one file
@@ -59,6 +75,9 @@ virtualized scrolling instead of loading the whole file into memory.
   export, **Ctrl+Z** undo, **F3** / **Shift+F3** next/previous match, **Esc** close a popup.
 - **Light and dark themes**, toggled from the button in the toolbar — and remembered, along with your
   recent files, between runs.
+- **File info on demand.** Header and trailer metadata, the delimiter, which section of a bulk file
+  you're on, and every parser warning with its byte offset — rather than a warning count you can't
+  read.
 - **No content validation gate.** The app shows records as they are in the file; it doesn't reject
   or flag rows for looking "malformed" — only structural file-format issues (e.g. a missing
   section marker) are surfaced as diagnostics.
@@ -108,14 +127,19 @@ Run `benchmarks/FileViewer.Benchmarks` for the maintained versions of these meas
 ## Project layout
 
 ```
-src/FileViewer.Core/    Format parsing, indexing, editing, sorting/filtering, export — no UI code
-src/FileViewer.App/     WPF UI: the virtualized grid, view models, dialogs, theming
-tests/FileViewer.Core.Tests/   xUnit tests for FileViewer.Core
+src/FileViewer.Core/       Format parsing, indexing, editing, sorting/filtering, export — no UI code
+src/FileViewer.App.Model/  View state with no WPF dependency: selection, paging options, settings
+src/FileViewer.App/        WPF UI: the virtualized grid, view models, dialogs, theming
+tests/FileViewer.Core.Tests/        xUnit tests for FileViewer.Core
+tests/FileViewer.App.Model.Tests/   xUnit tests for FileViewer.App.Model
 benchmarks/FileViewer.Benchmarks/   BenchmarkDotNet suite (see its own README)
 ```
 
 `FileViewer.Core` has no dependency on WPF or any UI framework — it's a plain library, so the
 indexing/editing/export logic is independently testable and could back a different front end later.
+`FileViewer.App.Model` exists for the same reason one level up: `FileViewer.App` targets
+`net8.0-windows`, which means no test project can reference it, so the view state that doesn't need
+WPF (selection, paging, preferences, settings) lives here where it can be covered.
 
 ## Building and running
 
@@ -130,6 +154,7 @@ dotnet run --project src/FileViewer.App
 
 ```
 dotnet test tests/FileViewer.Core.Tests
+dotnet test tests/FileViewer.App.Model.Tests
 ```
 
 ## Publishing a release build

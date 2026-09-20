@@ -49,16 +49,17 @@ public sealed class GridViewModel : ObservableObject
     private SortDirection _currentSortDirection = SortDirection.Ascending;
     private bool _isBusy;
 
-    public GridViewModel(FileViewerSession session, GridPreferences? preferences = null)
+    public GridViewModel(FileViewerSession session, GridPreferences? preferences = null, IReadOnlyList<long>? restrictedRows = null)
     {
         Session = session;
+        IsExtractedView = restrictedRows is not null;
         Preferences = preferences ?? new GridPreferences();
         Preferences.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName == nameof(GridPreferences.PageSize)) ApplyPageSizePreference();
         };
         Selection.Changed += OnSelectionChanged;
-        Rows = new VirtualizingRowCollection(session, Selection);
+        Rows = new VirtualizingRowCollection(session, Selection, restrictedRows);
         Rows.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(PageIndex));
@@ -111,6 +112,13 @@ public sealed class GridViewModel : ObservableObject
 
     /// <summary>Row-count and paging settings shared with every other open grid — see <see cref="GridPreferences"/>.</summary>
     public GridPreferences Preferences { get; }
+
+    /// <summary>
+    /// True for a view holding a fixed set of rows pulled out of another view. It shares the file's
+    /// index, cache and edit overlay with the view it came from — an edit here is an edit to the
+    /// same file — but it has its own filters, search, sort and column layout.
+    /// </summary>
+    public bool IsExtractedView { get; }
 
     public FileViewerSession Session { get; }
     public VirtualizingRowCollection Rows { get; }
@@ -521,7 +529,10 @@ public sealed class GridViewModel : ObservableObject
                 ? SortDirection.Descending
                 : SortDirection.Ascending);
 
-        if (columnName == "_ID")
+        // The "_ID" fast path permutes the session's own order, which an extracted view shares with
+        // the view it came from — sorting here would reorder that one too. Extracted views are a
+        // hand-picked set of rows, so the general path costs little and keeps them independent.
+        if (columnName == "_ID" && !IsExtractedView)
         {
             Rows.ClearCustomOrder();
             Session.ApplySort(direction);
@@ -530,7 +541,7 @@ public sealed class GridViewModel : ObservableObject
         {
             await RunBusyAsync(async () =>
             {
-                Session.ClearSort();
+                if (!IsExtractedView) Session.ClearSort();
                 List<long> candidates = CollectBaseAndAddedRowIndices();
                 List<long> sorted = await Task.Run(
                     () => RowSorter.SortByColumn(candidates, columnName, direction, Session.FileIndex, Session.Overlay, Session.Cache));
@@ -544,7 +555,7 @@ public sealed class GridViewModel : ObservableObject
 
     public void ClearSort()
     {
-        Session.ClearSort();
+        if (!IsExtractedView) Session.ClearSort();
         Rows.ClearCustomOrder();
         CurrentSortColumn = null;
     }
@@ -741,16 +752,12 @@ public sealed class GridViewModel : ObservableObject
         SearchColumn == AllColumnsScope ? null : SearchColumn,
         SearchCaseSensitive);
 
-    private List<long> CollectBaseAndAddedRowIndices()
-    {
-        var candidates = new List<long>();
-        for (nuint i = 0; i < Session.CurrentOrder.Count; i++)
-        {
-            candidates.Add(Session.CurrentOrder[i].RowIndex);
-        }
-        candidates.AddRange(Session.Overlay.GetLiveAddedOrDuplicatedRowIndices());
-        return candidates;
-    }
+    /// <summary>
+    /// The rows a sort should order: whatever this view starts from. Taken from the row collection
+    /// rather than rebuilt from the session, so an extracted view sorts its own rows instead of
+    /// silently pulling in the whole file.
+    /// </summary>
+    private List<long> CollectBaseAndAddedRowIndices() => [.. Rows.GetBaseRowOrder()];
 
     private void AddRow()
     {
