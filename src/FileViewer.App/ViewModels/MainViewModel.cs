@@ -25,6 +25,7 @@ namespace FileViewer.App.ViewModels;
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AppSettings _settings = AppSettings.Load();
+    private CancellationTokenSource? _indexingCts;
     private FileTabViewModel? _activeTab;
     private string _statusMessage = "No file open.";
     private double _indexingProgressPercent;
@@ -34,6 +35,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public MainViewModel()
     {
         ToggleThemeCommand = RelayCommand.Create(() => ThemeManager.Toggle());
+        CancelIndexingCommand = RelayCommand.Create(CancelIndexing, () => IsIndexing);
         CloseTabCommand = RelayCommand.Create<FileTabViewModel>(CloseTab);
         OpenRecentFileCommand = new AsyncRelayCommand<string>(OpenFileAsync);
 
@@ -107,6 +109,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     public ICommand ToggleThemeCommand { get; }
+
+    /// <summary>
+    /// Stops the index or structure scan in progress. Opening a multi-gigabyte file by mistake used
+    /// to mean waiting it out — the work was always cancellable, nothing ever asked it to stop.
+    /// </summary>
+    public ICommand CancelIndexingCommand { get; }
     public ICommand CloseTabCommand { get; }
 
     /// <summary>Opens one of <see cref="RecentFiles"/> — bound with the path as its parameter.</summary>
@@ -122,6 +130,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         get => _statusMessage;
         private set => SetField(ref _statusMessage, value);
     }
+
+    /// <summary>Puts a one-off message in the status bar — used for things the window does directly, like copying to the clipboard.</summary>
+    public void ReportStatus(string message) => StatusMessage = message;
 
     public double IndexingProgressPercent
     {
@@ -154,10 +165,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsIndexing = true;
         IndexingProgressPercent = 0;
         StatusMessage = $"Opening {Path.GetFileName(path)}...";
+        CancellationToken cancellationToken = BeginCancellableWork();
 
         try
         {
-            DifFileLayout layout = await FileIndexer.ScanLayoutAsync(path);
+            DifFileLayout layout = await FileIndexer.ScanLayoutAsync(path, cancellationToken);
 
             if (!layout.IsValid)
             {
@@ -181,6 +193,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             await ActivateTabAsync(tab);
             await ShowSectionAsync(tab, tab.Sections[0]);
         }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = $"Cancelled opening '{Path.GetFileName(path)}'.";
+        }
         catch (Exception ex)
         {
             // Malformed/unreadable files must fail gracefully, never crash the process (PRS §8).
@@ -198,8 +214,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            IsIndexing = false;
-            IndexingProgressPercent = 0;
+            EndCancellableWork();
         }
     }
 
@@ -237,6 +252,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StatusMessage = tab.HasMultipleSections
             ? $"Indexing section '{section.Name}' of {tab.Title}..."
             : $"Indexing {tab.Title}...";
+        CancellationToken cancellationToken = BeginCancellableWork();
 
         try
         {
@@ -247,7 +263,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             });
 
             FileViewerSession session = await FileViewerSession.OpenSectionAsync(
-                tab.FilePath, tab.Layout, section.Index, progress: progress);
+                tab.FilePath, tab.Layout, section.Index, progress: progress, cancellationToken: cancellationToken);
 
             // The tab can be closed while its section is still being indexed; handing the finished
             // session to a disposed tab would leak the file handle and show a grid for a file that
@@ -267,6 +283,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             FileLogger.Instance.LogInfo(
                 $"Opened '{tab.FilePath}' section '{section.Name}': {session.FileIndex.RowIndex.Count:N0} row(s).");
         }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = $"Cancelled indexing '{section.Name}'.";
+        }
         catch (Exception ex)
         {
             StatusMessage = $"Failed to open section '{section.Name}' of '{tab.Title}': {ex.Message}";
@@ -274,9 +294,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            IsIndexing = false;
-            IndexingProgressPercent = 0;
+            EndCancellableWork();
         }
+    }
+
+    private CancellationToken BeginCancellableWork()
+    {
+        _indexingCts?.Cancel();
+        _indexingCts?.Dispose();
+        _indexingCts = new CancellationTokenSource();
+        CommandManager.InvalidateRequerySuggested();
+        return _indexingCts.Token;
+    }
+
+    private void EndCancellableWork()
+    {
+        IsIndexing = false;
+        IndexingProgressPercent = 0;
+        _indexingCts?.Dispose();
+        _indexingCts = null;
+        CommandManager.InvalidateRequerySuggested();
+    }
+
+    private void CancelIndexing()
+    {
+        _indexingCts?.Cancel();
+        StatusMessage = "Cancelling…";
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows.Input;
 using FileViewer.App.Collections;
 using FileViewer.App.Common;
@@ -77,6 +78,7 @@ public sealed class GridViewModel : ObservableObject
             OnPropertyChanged(nameof(HasMatches));
             OnPropertyChanged(nameof(HasHighlight));
             OnPropertyChanged(nameof(MatchLabel));
+            RefreshHiddenMatchColumns();
             RebuildActiveFilterChips();
         };
         ColumnNames = session.FileIndex.Header.ColumnNames;
@@ -288,6 +290,83 @@ public sealed class GridViewModel : ObservableObject
     public string SearchModeLabel => HighlightInsteadOfFilter ? "Highlight" : "Filter";
 
     /// <summary>
+    /// Columns the highlight query matched in that are currently hidden. Only the first twenty
+    /// columns show by default, so without this the grid can report "412 matches" over a screen with
+    /// nothing marked on it — the matches being real, just off to the right in a column the user
+    /// never chose to show.
+    /// </summary>
+    public ObservableCollection<string> HiddenMatchColumns { get; } = new();
+
+    public bool HasHiddenMatches => HiddenMatchColumns.Count > 0;
+
+    public string HiddenMatchesLabel => HiddenMatchColumns.Count switch
+    {
+        0 => string.Empty,
+        1 => $"Also matching in hidden column {HiddenMatchColumns[0]}",
+        _ => $"Also matching in hidden columns: {string.Join(", ", HiddenMatchColumns)}",
+    };
+
+    /// <summary>Shows the hidden columns the matches are in, so they stop being invisible.</summary>
+    public void ShowHiddenMatchColumns()
+    {
+        foreach (string columnName in HiddenMatchColumns)
+        {
+            foreach (GridColumnInfo column in Columns.Where(c => c.Name == columnName))
+            {
+                column.IsVisible = true;
+            }
+        }
+        RefreshHiddenMatchColumns();
+    }
+
+    /// <summary>
+    /// Works out which hidden columns the current highlight matched in, from a bounded sample of the
+    /// matching rows — enough to answer "is there something off-screen", without a second full pass
+    /// over the result set just to phrase a hint.
+    /// </summary>
+    private void RefreshHiddenMatchColumns()
+    {
+        HiddenMatchColumns.Clear();
+
+        CompiledSearchQuery highlight = Rows.CompiledHighlight;
+        IReadOnlyList<int> positions = Rows.MatchPositions;
+        if (!highlight.IsEmpty && positions.Count > 0)
+        {
+            var hiddenIndexes = new HashSet<int>(Columns.Where(column => !column.IsVisible).Select(column => column.Index));
+            if (hiddenIndexes.Count > 0)
+            {
+                const int sampleSize = 250;
+                var found = new SortedSet<int>();
+                for (int i = 0; i < positions.Count && i < sampleSize && found.Count < hiddenIndexes.Count; i++)
+                {
+                    if (Rows.GetRowIndexAtPosition(positions[i]) is not long rowIndex) continue;
+
+                    Core.Overlay.ResolvedRow? resolved = Session.Resolve(rowIndex);
+                    if (resolved is null) continue;
+
+                    foreach (int columnIndex in hiddenIndexes)
+                    {
+                        if (found.Contains(columnIndex)) continue;
+                        if (columnIndex < resolved.FieldValues.Count
+                            && highlight.HighlightsCell(columnIndex, resolved.FieldValues[columnIndex]))
+                        {
+                            found.Add(columnIndex);
+                        }
+                    }
+                }
+
+                foreach (int columnIndex in found)
+                {
+                    HiddenMatchColumns.Add(ColumnNames[columnIndex]);
+                }
+            }
+        }
+
+        OnPropertyChanged(nameof(HasHiddenMatches));
+        OnPropertyChanged(nameof(HiddenMatchesLabel));
+    }
+
+    /// <summary>
     /// Raised when match navigation moves to a row, so the view can scroll it into sight. An event
     /// rather than a property change on <see cref="SelectedRow"/>: only navigation should steal the
     /// scroll position, not an ordinary click on a row.
@@ -431,13 +510,16 @@ public sealed class GridViewModel : ObservableObject
     public ICommand LastPageCommand { get; }
 
     /// <summary>Invoked from the DataGrid's Sorting event (column header click). Toggles ascending/descending on repeated clicks of the same column. No-ops while <see cref="IsBusy"/> — the caller (MainWindow) doesn't need its own guard.</summary>
-    public async Task SortByColumnAsync(string columnName)
+    public async Task SortByColumnAsync(string columnName, SortDirection? requestedDirection = null)
     {
         if (IsBusy) return;
 
-        SortDirection direction = columnName == CurrentSortColumn && CurrentSortDirection == SortDirection.Ascending
-            ? SortDirection.Descending
-            : SortDirection.Ascending;
+        // No direction asked for means "toggle" — what a header click does. The column menu asks for
+        // one explicitly.
+        SortDirection direction = requestedDirection
+            ?? (columnName == CurrentSortColumn && CurrentSortDirection == SortDirection.Ascending
+                ? SortDirection.Descending
+                : SortDirection.Ascending);
 
         if (columnName == "_ID")
         {
@@ -485,6 +567,77 @@ public sealed class GridViewModel : ObservableObject
         IsBusy
             ? Task.FromResult(new DistinctValueResult([], false))
             : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName));
+
+    /// <summary>
+    /// Rows past this are not copied. The clipboard is a single string held twice over (here and in
+    /// the system buffer), so an unbounded copy of a multi-million-row result is a way to run the
+    /// machine out of memory rather than a feature.
+    /// </summary>
+    public const int MaxClipboardRows = 100_000;
+
+    /// <summary>
+    /// The current selection as tab-separated text — one header line, then a line per row, covering
+    /// the visible columns in their current order. Tab-separated so it pastes straight into Excel.
+    /// Falls back to the focused row when nothing is ticked, because "copy" with no selection
+    /// obviously means the row you are looking at.
+    ///
+    /// Built on a background thread (it resolves rows) and handed back as a string: putting it on
+    /// the clipboard is the window's job, since that has to happen on the UI thread.
+    /// </summary>
+    public async Task<ClipboardPayload> BuildClipboardTextAsync()
+    {
+        int[] columnIndexes = [.. Columns.Where(column => column.IsVisible).Select(column => column.Index)];
+        if (columnIndexes.Length == 0) return new ClipboardPayload(string.Empty, 0, false);
+
+        IReadOnlyList<long> rowsInView = Rows.GetAllRowIndices();
+        List<long> rows = Selection.Count > 0
+            ? [.. Selection.Resolve(rowsInView)]
+            : SelectedRow is { } focused ? [focused.RowIndex] : [];
+
+        if (rows.Count == 0) return new ClipboardPayload(string.Empty, 0, false);
+
+        bool truncated = rows.Count > MaxClipboardRows;
+        if (truncated) rows = rows[..MaxClipboardRows];
+
+        FileViewerSession session = Session;
+        IReadOnlyList<string> columnNames = ColumnNames;
+
+        return await Task.Run(() =>
+        {
+            var builder = new StringBuilder();
+            for (int i = 0; i < columnIndexes.Length; i++)
+            {
+                if (i > 0) builder.Append('\t');
+                builder.Append(columnNames[columnIndexes[i]]);
+            }
+            builder.Append('\n');
+
+            foreach (long rowIndex in rows)
+            {
+                Core.Overlay.ResolvedRow? resolved = session.Resolve(rowIndex);
+                if (resolved is null) continue; // deleted while we were building
+
+                for (int i = 0; i < columnIndexes.Length; i++)
+                {
+                    if (i > 0) builder.Append('\t');
+                    int columnIndex = columnIndexes[i];
+                    string value = columnIndex < resolved.FieldValues.Count ? resolved.FieldValues[columnIndex] : string.Empty;
+                    // Tabs and newlines inside a value would break the row/column structure a
+                    // spreadsheet reads back, so they collapse to spaces — the same trade the TSV
+                    // exporter makes.
+                    builder.Append(value.IndexOfAny(['\t', '\r', '\n']) < 0
+                        ? value
+                        : value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' '));
+                }
+                builder.Append('\n');
+            }
+
+            return new ClipboardPayload(builder.ToString(), rows.Count, truncated);
+        });
+    }
+
+    /// <summary>Stops a filter pass that is still running — see <see cref="VirtualizingRowCollection"/>.</summary>
+    public void CancelFilter() => Rows.CancelPendingRecompute();
 
     /// <summary>Summarizes a column over the rows in view — the column menu's Stats view. Returns an empty summary (rather than running) while <see cref="IsBusy"/>.</summary>
     public Task<ColumnStatistics> GetColumnStatisticsAsync(string columnName) =>
@@ -649,6 +802,12 @@ public sealed class GridViewModel : ObservableObject
         Rows.Invalidate();
     }
 }
+
+/// <summary>Text destined for the clipboard, with what had to be left out of it.</summary>
+/// <param name="Text">Tab-separated rows, header first.</param>
+/// <param name="RowCount">How many rows it covers.</param>
+/// <param name="Truncated">True if the selection was larger than <see cref="GridViewModel.MaxClipboardRows"/>.</param>
+public readonly record struct ClipboardPayload(string Text, int RowCount, bool Truncated);
 
 /// <summary>A column's remembered on-screen size and position — see <see cref="GridViewModel.ColumnLayouts"/>.</summary>
 /// <param name="Width">Rendered width in pixels, or 0 if it was never measured.</param>

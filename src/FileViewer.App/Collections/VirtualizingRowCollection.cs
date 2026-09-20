@@ -325,6 +325,13 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         return offset >= 0 && offset < Count ? RowAtPageOffset((int)offset) : null;
     }
 
+    /// <summary>The row index at an absolute position in the current row order, or null if that position is out of range.</summary>
+    public long? GetRowIndexAtPosition(int position)
+    {
+        long[] order = EffectiveOrder;
+        return position >= 0 && position < order.Length ? order[position] : null;
+    }
+
     /// <summary>Every row index currently matching the active search/column filters, across every page — the full set "select all" should act on, not just the page currently on screen.</summary>
     public IReadOnlyList<long> GetAllRowIndices() => EffectiveOrder;
 
@@ -518,6 +525,13 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
             array.SetValue(RowAtPageOffset(i), index + i);
         }
     }
+
+    /// <summary>
+    /// Stops a filter pass that is still running, leaving the current rows in place. Bound to the
+    /// "Stop" next to the filtering indicator: on a multi-gigabyte file a filter can take seconds,
+    /// and being unable to change your mind is what makes that feel like a hang.
+    /// </summary>
+    public void CancelPendingRecompute() => _recomputeCts?.Cancel();
 
     /// <summary>Stops any filter pass still running (the tab or window is going away) and drops the page's row view models.</summary>
     public void Dispose()

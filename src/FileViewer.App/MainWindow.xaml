@@ -233,6 +233,10 @@
                         <Border Background="{DynamicResource CanvasBrush}" CornerRadius="6" Padding="2">
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ColumnsButton" Content="Columns" Style="{StaticResource ToolbarButtonStyle}" Click="OnColumnsButtonClick" />
+                                <Button Content="Copy" Style="{StaticResource ToolbarButtonStyle}" Click="OnCopyClick"
+                                        ToolTip="Copy the selected rows as tab-separated text (Ctrl+C) — pastes straight into Excel" />
+                                <Button x:Name="FileInfoButton" Content="File info" Style="{StaticResource ToolbarButtonStyle}" Click="OnFileInfoClick"
+                                        ToolTip="Header metadata, section details and any parser warnings for this file" />
                             </StackPanel>
                         </Border>
 
@@ -360,6 +364,18 @@
                 </WrapPanel>
             </Border>
 
+            <!-- Matches the user cannot see: only the first twenty columns show by default, so a
+                 highlight can report hundreds of matches over a screen with nothing marked on it. -->
+            <Border DockPanel.Dock="Top" Background="{DynamicResource PaleYellowBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding Grid.HasHiddenMatches, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                <DockPanel Margin="16,6">
+                    <Button DockPanel.Dock="Right" Content="Show them" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12"
+                            Click="OnShowHiddenMatchColumnsClick" />
+                    <TextBlock Text="{Binding Grid.HiddenMatchesLabel}" VerticalAlignment="Center" FontSize="12"
+                               Foreground="{DynamicResource PaleYellowTextBrush}" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+            </Border>
+
             <!-- ============================== Active filters summary ================== -->
             <!-- "What am I filtering by" — every active search/column-value/column-pattern filter
                  as a removable chip, so it's never a mystery why fewer rows are showing. -->
@@ -397,10 +413,13 @@
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,10">
                     <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
-                    <ProgressBar Width="220" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                 Minimum="0" Maximum="100"
-                                 Value="{Binding IndexingProgressPercent, Mode=OneWay}"
-                                 Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Visibility="{Binding IsIndexing, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ProgressBar Width="220" VerticalAlignment="Center" Minimum="0" Maximum="100"
+                                     Value="{Binding IndexingProgressPercent, Mode=OneWay}" />
+                        <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="8,3" FontSize="11" Margin="8,0,0,0"
+                                Command="{Binding CancelIndexingCommand}" ToolTip="Stop opening this file" />
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -417,6 +436,9 @@
                         <TextBlock Text="Filtering…" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
                                    Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
                                    Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        <Button Content="Stop" Style="{StaticResource ToolbarButtonStyle}" Padding="8,3" FontSize="11" Margin="8,0,0,0"
+                                Click="OnCancelFilterClick" ToolTip="Stop filtering and keep the rows currently shown"
+                                Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
                     </StackPanel>
 
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
@@ -623,6 +645,54 @@
             </Border>
         </Popup>
 
+        <!-- ============================== File info ================================ -->
+        <!-- What the file says about itself, plus anything the parser had to warn about. The
+             warnings used to be a number in the status bar with no way to read them. -->
+        <Popup x:Name="FileInfoPopup" PlacementTarget="{Binding ElementName=FileInfoButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
+            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" MaxHeight="520" Width="460" Margin="0,4,0,0">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.05" BlurRadius="18" ShadowDepth="2" Direction="270" />
+                </Border.Effect>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="FILE INFO" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,10" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <ItemsControl x:Name="FileInfoList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="4,3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}"
+                                                       TextWrapping="Wrap" ToolTip="{Binding Value}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock x:Name="FileDiagnosticsHeading" Text="DIAGNOSTICS" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,14,4,6" Visibility="Collapsed" />
+                            <ItemsControl x:Name="FileDiagnosticsList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource CanvasBrush}" CornerRadius="4" Padding="8,6" Margin="4,0,4,6">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Headline}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                <TextBlock Text="{Binding Message}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Popup>
+
         <!-- ============================== Recent files ============================= -->
         <Popup x:Name="RecentFilesPopup" PlacementTarget="{Binding ElementName=RecentFilesButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Opened="OnPopupOpened">
             <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="8" MaxHeight="420" Width="420" Margin="0,4,0,0">
@@ -667,11 +737,29 @@
                     <TextBlock x:Name="ColumnFilterTitle" DockPanel.Dock="Top" FontSize="10" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" TextTrimming="CharacterEllipsis" />
 
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
                         <Button x:Name="ColumnValuesModeButton" Content="Values" Style="{StaticResource ToolbarButtonStyle}"
                                 Padding="10,4" FontSize="12" Click="OnColumnValuesModeClick" />
                         <Button x:Name="ColumnStatsModeButton" Content="Stats" Style="{StaticResource ToolbarButtonStyle}"
                                 Padding="10,4" FontSize="12" Click="OnColumnStatsModeClick" />
+                    </StackPanel>
+
+                    <!-- Sorting and the per-column filter live here rather than on the header itself:
+                         a header click is already how you resize and reorder, and this is where a
+                         user goes looking for what a column can do. -->
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Sort A→Z" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortAscendingClick" />
+                            <Button Content="Sort Z→A" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortDescendingClick" />
+                            <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnClearSortClick"
+                                    ToolTip="Back to file order" />
+                        </StackPanel>
+                        <TextBox x:Name="ColumnPatternBox" Margin="0,0,0,6" KeyDown="OnColumnPatternBoxKeyDown"
+                                 ToolTip="Show only rows whose value in this column matches. Press Enter to apply." />
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox x:Name="ColumnPatternRegexBox" Content="Regex" VerticalAlignment="Center" FontSize="12" />
+                            <Button Content="Apply" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Margin="8,0,0,0" Click="OnColumnPatternApplyClick" />
+                        </StackPanel>
                     </StackPanel>
 
                     <Grid>

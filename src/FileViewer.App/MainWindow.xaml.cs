@@ -12,9 +12,12 @@ using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using FileViewer.App.Collections;
+using FileViewer.App.Logging;
 using FileViewer.App.ViewModels;
 using FileViewer.App.Views;
+using FileViewer.Core.Dif;
 using FileViewer.Core.Filtering;
+using FileViewer.Core.Sorting;
 using FileViewer.Core.Statistics;
 using Microsoft.Win32;
 
@@ -157,6 +160,16 @@ public partial class MainWindow : Window
                 OnExportButtonClick(this, new RoutedEventArgs());
                 break;
 
+            case Key.C:
+                // Only when the grid has the focus: Ctrl+C inside the search box must stay ordinary
+                // text copying.
+                if (RowsDataGrid.IsKeyboardFocusWithin)
+                {
+                    e.Handled = true;
+                    await CopySelectionAsync();
+                }
+                break;
+
             case Key.Z:
                 if (_viewModel.Grid is { } grid && grid.UndoCommand.CanExecute(null))
                 {
@@ -285,6 +298,93 @@ public partial class MainWindow : Window
     }
 
     private void OnColumnsButtonClick(object sender, RoutedEventArgs e) => ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
+
+    /// <summary>Copies the ticked rows (or the focused one) as tab-separated text, ready to paste into a spreadsheet.</summary>
+    private async void OnCopyClick(object sender, RoutedEventArgs e) => await CopySelectionAsync();
+
+    private async Task CopySelectionAsync()
+    {
+        if (_viewModel.Grid is not { } grid) return;
+
+        ClipboardPayload payload = await grid.BuildClipboardTextAsync();
+        if (payload.RowCount == 0)
+        {
+            _viewModel.ReportStatus("Nothing to copy — tick some rows, or click one.");
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(payload.Text);
+        }
+        catch (Exception ex)
+        {
+            // The clipboard is a shared OS resource and another process can be holding it open;
+            // failing to copy is not a reason to take the app down.
+            FileLogger.Instance.LogWarning($"Could not write to the clipboard: {ex.Message}");
+            _viewModel.ReportStatus("Could not copy — another program is using the clipboard.");
+            return;
+        }
+
+        _viewModel.ReportStatus(payload.Truncated
+            ? $"Copied the first {payload.RowCount:N0} row(s) — the selection was larger than the clipboard limit."
+            : $"Copied {payload.RowCount:N0} row(s).");
+    }
+
+    private void OnCancelFilterClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.CancelFilter();
+
+    private void OnShowHiddenMatchColumnsClick(object sender, RoutedEventArgs e) => _viewModel.Grid?.ShowHiddenMatchColumns();
+
+    /// <summary>Opens the file-info panel, filling it from whatever file is on screen right now.</summary>
+    private void OnFileInfoClick(object sender, RoutedEventArgs e)
+    {
+        if (FileInfoPopup.IsOpen)
+        {
+            FileInfoPopup.IsOpen = false;
+            return;
+        }
+        if (_viewModel.Grid is not { } grid) return;
+
+        FileInfoList.ItemsSource = DescribeFile(grid);
+
+        var diagnostics = grid.Session.FileIndex.Diagnostics
+            .Select(d => new FileDiagnosticLine($"{d.Severity} at byte {d.Offset:N0}", d.Message))
+            .ToList();
+        FileDiagnosticsList.ItemsSource = diagnostics;
+        FileDiagnosticsHeading.Visibility = diagnostics.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        FileInfoPopup.IsOpen = true;
+    }
+
+    /// <summary>The header/trailer metadata and section details a user needs when a file looks wrong.</summary>
+    private static List<ColumnStatLine> DescribeFile(GridViewModel grid)
+    {
+        DifFileHeader header = grid.Session.FileIndex.Header;
+        var lines = new List<ColumnStatLine>
+        {
+            new("File", grid.Session.FileIndex.FilePath),
+            new("Size", $"{grid.Session.FileIndex.FileLength / 1024.0 / 1024.0:N1} MB"),
+            new("Rows indexed", $"{grid.Session.FileIndex.RowIndex.Count:N0}"),
+            new("Columns", $"{header.ColumnNames.Count:N0}"),
+            new("Delimiter", header.Delimiter == '\t' ? "(tab)" : header.Delimiter.ToString()),
+            new("Header marker", header.HeaderMarker),
+        };
+
+        if (header.IsMultiSection)
+        {
+            lines.Add(new ColumnStatLine("Section", $"{header.SectionName}  ({header.SectionIndex + 1} of {header.SectionCount})"));
+        }
+        if (header.DeclaredDataRecords is int declared)
+        {
+            lines.Add(new ColumnStatLine("DATARECORDS", $"{declared:N0}"));
+        }
+
+        foreach ((string key, string value) in header.HeaderMetadata) lines.Add(new ColumnStatLine(key, value));
+        foreach ((string key, string value) in header.PostFieldsMetadata) lines.Add(new ColumnStatLine(key, value));
+        foreach ((string key, string value) in header.TrailerMetadata) lines.Add(new ColumnStatLine(key, value));
+
+        return lines;
+    }
 
     /// <summary>Fades and drops the popup's content in on every open — Popup reuses its visual tree across opens, so a Loaded-based trigger would only ever fire once; Opened fires every time.</summary>
     private void OnPopupOpened(object sender, EventArgs e)
@@ -729,6 +829,10 @@ public partial class MainWindow : Window
         ColumnFilterLoadingText.Visibility = Visibility.Visible;
         ColumnFilterTruncatedText.Visibility = Visibility.Collapsed;
 
+        ColumnPatternFilter? existingPattern = grid.Rows.GetColumnPatternFilter(columnName);
+        ColumnPatternBox.Text = existingPattern?.Pattern ?? string.Empty;
+        ColumnPatternRegexBox.IsChecked = existingPattern?.UseRegex ?? false;
+
         ShowColumnValuesView();
 
         ColumnFilterPopup.PlacementTarget = placementTarget;
@@ -831,6 +935,53 @@ public partial class MainWindow : Window
         return lines;
     }
 
+    private async void OnColumnSortAscendingClick(object sender, RoutedEventArgs e) => await SortActiveColumnAsync(SortDirection.Ascending);
+
+    private async void OnColumnSortDescendingClick(object sender, RoutedEventArgs e) => await SortActiveColumnAsync(SortDirection.Descending);
+
+    private void OnColumnClearSortClick(object sender, RoutedEventArgs e)
+    {
+        ColumnFilterPopup.IsOpen = false;
+        _viewModel.Grid?.ClearSort();
+    }
+
+    private async Task SortActiveColumnAsync(SortDirection direction)
+    {
+        if (_activeFilterColumn is not { } columnName || _viewModel.Grid is not { } grid) return;
+
+        ColumnFilterPopup.IsOpen = false;
+        await grid.SortByColumnAsync(columnName, direction);
+    }
+
+    private async void OnColumnPatternBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        await ApplyColumnPatternFilterAsync();
+    }
+
+    private async void OnColumnPatternApplyClick(object sender, RoutedEventArgs e) => await ApplyColumnPatternFilterAsync();
+
+    /// <summary>Applies (or clears, with an empty box) this column's own text/regex filter.</summary>
+    private async Task ApplyColumnPatternFilterAsync()
+    {
+        if (_activeFilterColumn is not { } columnName || _viewModel.Grid is not { } grid) return;
+
+        string pattern = ColumnPatternBox.Text;
+        bool useRegex = ColumnPatternRegexBox.IsChecked == true;
+
+        // An invalid regex matches nothing rather than throwing, so say so instead of letting the
+        // grid silently empty itself.
+        if (useRegex && pattern.Length > 0 && !RowFilter.TryCompileRegex(pattern, out _, out string? error))
+        {
+            _viewModel.ReportStatus($"Not a valid regular expression: {error}");
+            return;
+        }
+
+        ColumnFilterPopup.IsOpen = false;
+        await grid.SetColumnPatternFilterAsync(columnName, pattern, useRegex);
+    }
+
     private void OnColumnFilterSearchChanged(object sender, TextChangedEventArgs e) => ApplyColumnFilterSearch();
 
     private void ApplyColumnFilterSearch()
@@ -898,6 +1049,9 @@ public partial class MainWindow : Window
         }
     }
 }
+
+/// <summary>One parser warning, as the file-info panel lists it.</summary>
+public sealed record FileDiagnosticLine(string Headline, string Message);
 
 /// <summary>One label/value line of the column menu's Stats view.</summary>
 public sealed record ColumnStatLine(string Label, string Value);
