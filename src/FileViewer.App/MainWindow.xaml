@@ -764,26 +764,77 @@
                          a header click is already how you resize and reorder, and this is where a
                          user goes looking for what a column can do. -->
                     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                             <Button Content="Sort A→Z" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortAscendingClick" />
                             <Button Content="Sort Z→A" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnSortDescendingClick" />
-                            <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnClearSortClick"
+                            <!-- "Clear sort", not "Clear": there is a second Clear further down for the
+                                 value ticks, and two unqualified Clears in one popup say nothing about
+                                 which is which. -->
+                            <Button Content="Clear sort" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnClearSortClick"
                                     ToolTip="Back to file order" />
                         </StackPanel>
-                        <TextBox x:Name="ColumnPatternBox" Margin="0,0,0,6" KeyDown="OnColumnPatternBoxKeyDown"
-                                 ToolTip="Show only rows whose value in this column matches. Press Enter to apply." />
+
+                        <!-- The two ways to filter one column are stacked with nothing saying so, which
+                             reads as one confusing form. Each gets a heading, and the second says "or"
+                             so the relationship between them is legible at a glance. -->
+                        <TextBlock Text="MATCH BY TEXT" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                        <Grid Margin="0,0,0,6">
+                            <TextBox x:Name="ColumnPatternBox" KeyDown="OnColumnPatternBoxKeyDown"
+                                     AutomationProperties.Name="Match this column by text"
+                                     ToolTip="Show only rows whose value in this column matches. Press Enter to apply." />
+                            <TextBlock Text="Contains…  (Enter to apply)" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnPatternBox}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <StackPanel Orientation="Horizontal">
-                            <CheckBox x:Name="ColumnPatternRegexBox" Content="Regex" VerticalAlignment="Center" FontSize="12" />
+                            <CheckBox x:Name="ColumnPatternRegexBox" Content="Regex" VerticalAlignment="Center" FontSize="12"
+                                      ToolTip="Treat the text above as a regular expression instead of a substring" />
                             <Button Content="Apply" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Margin="8,0,0,0" Click="OnColumnPatternApplyClick" />
                         </StackPanel>
                     </StackPanel>
 
                     <Grid>
                         <DockPanel x:Name="ColumnValuesPanel">
-                            <TextBox x:Name="ColumnFilterSearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="OnColumnFilterSearchChanged" />
+                            <TextBlock DockPanel.Dock="Top" Text="OR PICK FROM VALUES" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,5" />
+                            <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                                <TextBox x:Name="ColumnFilterSearchBox" TextChanged="OnColumnFilterSearchChanged"
+                                         AutomationProperties.Name="Search values"
+                                         ToolTip="Narrows the list below. Select all / Deselect all then apply to just what the search leaves showing." />
+                                <TextBlock Text="Search values…" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnFilterSearchBox}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <!-- "Deselect all" rather than "Clear": it already unticked everything, but
+                                 next to a "Clear sort" button "Clear" reads as "clear the filter", which
+                                 is the opposite of what ticking nothing then applying does. Both buttons
+                                 act on whatever the search above leaves showing, which is why they say so. -->
                             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick" />
-                                <Button Content="Clear" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick" />
+                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick"
+                                        ToolTip="Tick every value currently listed" />
+                                <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick"
+                                        ToolTip="Untick every value currently listed" />
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                                 <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
@@ -797,7 +848,7 @@
                             <!-- Shown when the column has more distinct values than the lookup collects, so a
                                  partial list is never presented as the complete set. -->
                             <TextBlock x:Name="ColumnFilterTruncatedText" DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="11"
-                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or the column's filter row."
+                                       Text="Showing the first values only — this column has too many distinct values to list them all. Use the search box above, or match by text instead."
                                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,4,8" Visibility="Collapsed" />
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <ItemsControl x:Name="ColumnFilterValuesList">
