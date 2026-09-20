@@ -193,4 +193,69 @@ public class DifSectionScannerTests
         Assert.False(DifSectionScanner.TryExtractTrailingDataAttribute(
             "START-OF-FIELDS", DifFormatOptions.FieldsStart, out _));
     }
+
+    // ---- Concatenated file envelopes -------------------------------------------------------
+    //
+    // A real bulk delivery is not one envelope holding several field blocks; it is whole file
+    // envelopes laid end to end, each with its own START-OF-FILE, preamble, DATA= name, fields,
+    // data, per-envelope stats and END-OF-FILE. Both fixtures below are that shape.
+
+    [Fact]
+    public void Scan_ConcatenatedFileEnvelopes_FindsEverySectionAndKeepsItsName()
+    {
+        DifFileLayout layout = ScanFixture("bulk_concatenated_envelopes.dif");
+
+        Assert.True(layout.IsValid);
+        Assert.Equal(3, layout.Sections.Count);
+        Assert.Equal(
+            ["CALL_SCHEDULE", "DVD_HIST", "INDX_MEMBERS"],
+            layout.Sections.Select(section => section.Name));
+    }
+
+    [Fact]
+    public void Scan_ConcatenatedFileEnvelopes_GivesEachSectionItsOwnFieldList()
+    {
+        DifFileLayout layout = ScanFixture("bulk_concatenated_envelopes.dif");
+
+        // Each envelope declares its own fields; the implicit _ID/_ERR/_SIZE prefix is added to each.
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "CALL_DATE", "CALL_PRICE"], layout.Sections[0].ColumnNames);
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "DECLARED_DATE", "EX_DATE", "DIVIDEND_AMOUNT"], layout.Sections[1].ColumnNames);
+        Assert.Equal(["_ID", "_ERR", "_SIZE", "MEMBER_TICKER_AND_EXCHANGE_CODE", "PERCENT_WEIGHT"], layout.Sections[2].ColumnNames);
+    }
+
+    [Fact]
+    public void Scan_ConcatenatedFileEnvelopes_AttributesEachEnvelopesOwnDataRecords()
+    {
+        // The per-envelope DATARECORDS sits after that envelope's END-OF-DATA and before its
+        // END-OF-FILE, so it belongs to that section rather than to the file trailer.
+        DifFileLayout layout = ScanFixture("bulk_concatenated_envelopes.dif");
+
+        Assert.Equal(2, layout.Sections[0].DeclaredDataRecords);
+        Assert.Equal(3, layout.Sections[1].DeclaredDataRecords);
+        Assert.Equal(1, layout.Sections[2].DeclaredDataRecords);
+    }
+
+    [Fact]
+    public void Scan_FileOpeningWithStartOfFileRatherThanAHeaderMarker_StillOpens()
+    {
+        // No INAHDR/IMAHDR anywhere: START-OF-FILE is the file's own first line. Rejecting these
+        // meant a whole shape of real delivery could not be opened at all.
+        DifFileLayout layout = ScanFixture("bulk_envelopes_no_header_marker.dif");
+
+        Assert.True(layout.IsValid);
+        Assert.Equal(3, layout.Sections.Count);
+        Assert.True(layout.HasFileStartMarker);
+        Assert.Equal(string.Empty, layout.HeaderMarker); // none to record, and none invented
+    }
+
+    [Fact]
+    public void Scan_ConcatenatedFileEnvelopes_DoesNotSwallowLaterNamesIntoTheTrailer()
+    {
+        // The regression this guards: the first END-OF-FILE used to latch "the trailer has begun",
+        // after which every later DATA= line was filed as trailer metadata instead of naming its
+        // section, so everything after the first envelope came out as "Section 2", "Section 3", ...
+        DifFileLayout layout = ScanFixture("bulk_concatenated_envelopes.dif");
+
+        Assert.DoesNotContain(layout.Sections, section => section.Name.StartsWith("Section ", StringComparison.Ordinal));
+    }
 }
