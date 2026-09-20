@@ -285,6 +285,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Section bar (bulk files): switches the active tab to one of its DATA= sections, indexing it on first use.</summary>
+    private async void OnOpenAllSectionsInTabsClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.ActiveTab is { } tab) await _viewModel.OpenAllSectionsAsTabsAsync(tab);
+    }
+
     private async void OnSectionChipClick(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: FileSectionViewModel section }) return;

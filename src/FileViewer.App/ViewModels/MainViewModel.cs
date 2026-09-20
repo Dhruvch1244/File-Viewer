@@ -223,6 +223,69 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Splits a bulk file's tab into one tab per section, so every section is on screen at once
+    /// rather than a click away behind the section bar.
+    ///
+    /// The original tab is closed as part of the split, deliberately: leaving it open would mean the
+    /// same section existed in two tabs, each with its own edit overlay, and an edit made in one
+    /// would be invisible in the other while both claimed to be the same rows of the same file.
+    /// Sections still index lazily — only the tab that ends up in front is read now.
+    /// </summary>
+    public async Task OpenAllSectionsAsTabsAsync(FileTabViewModel tab)
+    {
+        if (!tab.HasMultipleSections) return;
+
+        string fileName = tab.FileName;
+        string filePath = tab.FilePath;
+        DifFileLayout layout = tab.Layout;
+        int insertAt = Tabs.IndexOf(tab);
+
+        // Edits live in a section's session, so move the sessions across rather than letting the
+        // close drop them: a split keeps whatever has been edited instead of offering to throw it
+        // away, and a section already read is not read again. Sections never opened carry nothing
+        // and stay lazy.
+        var carried = new Dictionary<int, FileViewerSession>();
+        foreach (FileSectionViewModel loaded in tab.Sections)
+        {
+            if (loaded.DetachSession() is { } session) carried[loaded.Index] = session;
+        }
+
+        // With the sessions moved out, there are no unexported edits left here to warn about, so
+        // this closes without a prompt. CloseTab still owns that question for every other caller.
+        CloseTab(tab);
+        if (Tabs.Contains(tab))
+        {
+            // Declined (it can still happen via an extract of this tab). Put the sessions back so
+            // the tab is exactly as it was rather than silently emptied.
+            foreach ((int index, FileViewerSession session) in carried)
+            {
+                tab.Sections.First(s => s.Index == index).Attach(session);
+            }
+            return;
+        }
+
+        var created = new List<FileTabViewModel>(layout.Sections.Count);
+        for (int i = 0; i < layout.Sections.Count; i++)
+        {
+            var sectionTab = new FileTabViewModel(filePath, layout, Preferences, singleSection: i);
+            if (carried.Remove(i, out FileViewerSession? session))
+            {
+                sectionTab.Sections[0].Attach(session);
+                sectionTab.ActiveSection = sectionTab.Sections[0];
+            }
+            Tabs.Insert(Math.Clamp(insertAt, 0, Tabs.Count) + i, sectionTab);
+            created.Add(sectionTab);
+        }
+
+        RetitleTabs();
+        OnPropertyChanged(nameof(HasFileOpen));
+
+        await ActivateTabAsync(created[0]);
+        await ShowSectionAsync(created[0], created[0].Sections[0]);
+        StatusMessage = $"Opened {created.Count} sections of {fileName} as separate tabs.";
+    }
+
     /// <summary>Brings a tab to the front, indexing its active section first if it has never been shown.</summary>
     public async Task ActivateTabAsync(FileTabViewModel tab)
     {
@@ -337,12 +400,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (tab.IsExtract) continue; // its title already says what it is
 
+            // Only a *different* file sharing the name needs the folder to tell it apart. Several
+            // tabs on the same path are sections of one bulk file, and the section name below
+            // already distinguishes them — prefixing all of them with the folder says nothing.
             bool nameIsAmbiguous = Tabs.Any(other =>
-                !ReferenceEquals(other, tab) && string.Equals(other.FileName, tab.FileName, StringComparison.OrdinalIgnoreCase));
+                !ReferenceEquals(other, tab)
+                && string.Equals(other.FileName, tab.FileName, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(other.FilePath, tab.FilePath, StringComparison.OrdinalIgnoreCase));
 
-            tab.Title = nameIsAmbiguous && tab.ParentFolderName.Length > 0
+            string baseName = nameIsAmbiguous && tab.ParentFolderName.Length > 0
                 ? Path.Combine(tab.ParentFolderName, tab.FileName)
                 : tab.FileName;
+
+            tab.Title = tab.PinnedSectionName is { Length: > 0 } section ? $"{baseName} · {section}" : baseName;
         }
     }
 

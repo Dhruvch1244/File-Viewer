@@ -283,11 +283,25 @@
                  table in its own right (its own columns and rows) and is indexed the first time it
                  is opened, not when the file is. -->
             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
-                    Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                    Visibility="{Binding ActiveTab.IsFromBulkFile, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
                 <DockPanel Margin="16,8">
-                    <TextBlock DockPanel.Dock="Left" Text="SECTIONS" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <!-- Names the shape of the file, not just "sections": a bulk delivery is several
+                         whole exports in one file, each with its own columns, and that is worth saying
+                         before someone wonders why the columns changed when they clicked a chip. -->
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding ActiveTab.SectionBarLabel}" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentDarkBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <Button DockPanel.Dock="Right" Content="Open all in tabs" Style="{StaticResource ToolbarButtonStyle}"
+                            Padding="10,4" FontSize="12" Margin="10,0,0,0" Click="OnOpenAllSectionsInTabsClick"
+                            Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}"
+                            ToolTip="Give every section its own tab, so they are all on screen at once instead of one click apart" />
+                    <!-- A tab pinned to one section has no chips to show — the other sections are
+                         other tabs now — but it still needs to say that it is part of a bulk file
+                         and that these columns are this section's own. -->
+                    <TextBlock Text="{Binding ActiveTab.PinnedSectionSummary}" FontSize="12" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondaryBrush}"
+                               Visibility="{Binding ActiveTab.IsPinnedToOneSection, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                  Visibility="{Binding ActiveTab.HasMultipleSections, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
                         <ItemsControl ItemsSource="{Binding ActiveTab.Sections}" ItemTemplate="{StaticResource FileSectionTemplate}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
