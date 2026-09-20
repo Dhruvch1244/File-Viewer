@@ -27,8 +27,35 @@ public sealed class RowViewModel(
 
     public long RowIndex => rowIndex;
 
+    /// <summary>
+    /// Drops this row's resolved values and tells its bindings to re-read them — used after the row
+    /// was edited somewhere else (the record dialog edits its own wrapper for the same row).
+    /// </summary>
+    public void Refresh()
+    {
+        _resolved = null;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(System.Windows.Data.Binding.IndexerName));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RenderState)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CellMatch)));
+    }
+
+    /// <summary>Tells the row's checkbox to re-read <see cref="IsSelected"/> after a bulk selection change.</summary>
+    public void RefreshSelection() =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
+
     /// <summary>Whether this row was resolved against <paramref name="other"/> — how the grid rejects a row that belongs to a different tab (see <see cref="GridViewModel.SelectedRow"/>).</summary>
     public bool BelongsTo(FileViewerSession other) => ReferenceEquals(session, other);
+
+    /// <summary>
+    /// Two wrappers for the same row of the same file are the same row. Identity has to survive the
+    /// instance being rebuilt, because these are created on demand and dropped whenever the visible
+    /// window moves — with reference equality, scrolling far enough would silently lose the
+    /// selection and leave the grid unable to find the row it had selected.
+    /// </summary>
+    public override bool Equals(object? obj) =>
+        obj is RowViewModel other && other.RowIndex == rowIndex && other.BelongsTo(session);
+
+    public override int GetHashCode() => HashCode.Combine(rowIndex, session);
 
     /// <summary>Whether this row is checked for bulk actions — backed by <see cref="RowSelectionState"/>, not this (short-lived, per-page) instance, so the check survives paging.</summary>
     public bool IsSelected

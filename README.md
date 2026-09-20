@@ -41,8 +41,14 @@ virtualized scrolling instead of loading the whole file into memory.
   the first time you open them, not when the file opens — a ten-section file costs one structural
   scan plus the sections you actually look at. Export writes the section you're on as an ordinary
   single-section DIF file — or every section at once, one file each.
+- **Show as many rows as you want.** Rows per page runs from 50 up to **All rows**, which turns
+  paging off and scrolls through the whole result set. That isn't the expensive option it sounds
+  like: the grid only ever builds the rows on screen, and a row is read from the file and decoded
+  only when it is asked for, so the page size was never a limit on what could be shown — only on
+  what was. First/last page buttons and a "jump to page" box come with it, and the choice is
+  remembered for the next file and the next run.
 - **Select at scale.** A "select all" that spans every row matching the current filters — not just
-  the page currently on screen — so bulk actions act on the full result set.
+  the rows currently on screen — so bulk actions act on the full result set.
 - **Multi-format export, scoped to what you mean.** DIF, CSV, TSV or JSON, with a live preview of the
   first rows. By default it writes exactly the rows the grid is showing — edits, sort and filters
   applied — or just the rows you have ticked, or (for a bulk file) every section at once as one file

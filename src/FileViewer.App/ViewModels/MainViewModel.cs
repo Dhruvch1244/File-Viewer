@@ -52,8 +52,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _settings.Save();
         };
 
+        Preferences.PageSize = PageSizeOption.FromSetting(_settings.RowsPerPage);
+        Preferences.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName != nameof(GridPreferences.PageSize)) return;
+            _settings.RowsPerPage = Preferences.PageSize.ToSetting();
+            _settings.Save();
+        };
+
         RefreshRecentFiles();
     }
+
+    /// <summary>Grid settings shared by every open tab and section — currently how many rows a page shows. See <see cref="GridPreferences"/>.</summary>
+    public GridPreferences Preferences { get; } = new();
 
     /// <summary>Every open file, in the order they were opened — the tab strip's source.</summary>
     public ObservableCollection<FileTabViewModel> Tabs { get; } = new();
@@ -157,7 +168,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            var tab = new FileTabViewModel(path, layout);
+            var tab = new FileTabViewModel(path, layout, Preferences);
             Tabs.Add(tab);
             OnPropertyChanged(nameof(HasFileOpen));
 

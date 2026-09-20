@@ -19,12 +19,12 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
     private bool _isActive;
     private string _title;
 
-    public FileTabViewModel(string filePath, DifFileLayout layout)
+    public FileTabViewModel(string filePath, DifFileLayout layout, GridPreferences preferences)
     {
         FilePath = filePath;
         Layout = layout;
         _title = Path.GetFileName(filePath);
-        Sections = new ObservableCollection<FileSectionViewModel>(layout.Sections.Select(section => new FileSectionViewModel(section)));
+        Sections = new ObservableCollection<FileSectionViewModel>(layout.Sections.Select(section => new FileSectionViewModel(section, preferences)));
     }
 
     public string FilePath { get; }

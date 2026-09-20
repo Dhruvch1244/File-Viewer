@@ -306,6 +306,22 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Enter in the page box jumps to that page; anything unparseable snaps back to the current one.</summary>
+    private void OnPageNumberBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+
+        e.Handled = true;
+        _viewModel.Grid?.GoToPageNumber(PageNumberBox.Text);
+        PageNumberBox.Text = _viewModel.Grid?.PageNumberText ?? PageNumberBox.Text;
+    }
+
+    /// <summary>Clicking away from a half-typed page number restores what is actually on screen, rather than leaving a number that means nothing.</summary>
+    private void OnPageNumberBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.Grid is { } grid) PageNumberBox.Text = grid.PageNumberText;
+    }
+
     /// <summary>Header checkbox: selects/clears every row matching the active filters, across every page — see <see cref="ViewModels.RowSelectionState"/>.</summary>
     private void OnSelectAllHeaderChecked(object sender, RoutedEventArgs e) => _viewModel.Grid?.SelectAllRows();
 
@@ -319,10 +335,11 @@ public partial class MainWindow : Window
         var dialog = new RowDetailView(row) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
-            // The dialog edited a different RowViewModel instance than whatever the grid currently
-            // has rendered for this row (each cell access creates its own), so the grid's own
-            // instance won't raise PropertyChanged for the change on its own — force a re-query.
-            grid.Rows.Invalidate();
+            // The dialog edited a different RowViewModel instance than the one the grid has
+            // rendered for this row, so the grid's own instance won't hear about the change. Only
+            // that row needs re-reading — rebuilding the collection would throw away the scroll
+            // position (and the page) for a change that affects one row's text.
+            grid.Rows.RefreshRow(row.RowIndex);
         }
     }
 
@@ -358,6 +375,10 @@ public partial class MainWindow : Window
     private void ApplyDynamicPageSize()
     {
         if (_viewModel.Grid is not { } grid) return;
+
+        // Only the fit-to-window choice is measured from the layout; a fixed count or "all rows"
+        // means exactly what it says and must not be overwritten on every resize.
+        if (!grid.IsPageSizeFitToWindow) return;
 
         double headerHeight = double.IsNaN(RowsDataGrid.ColumnHeaderHeight) ? 36 : RowsDataGrid.ColumnHeaderHeight;
         double rowHeight = double.IsNaN(RowsDataGrid.RowHeight) || RowsDataGrid.RowHeight <= 0 ? 28 : RowsDataGrid.RowHeight;

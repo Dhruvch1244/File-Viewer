@@ -48,9 +48,14 @@ public sealed class GridViewModel : ObservableObject
     private SortDirection _currentSortDirection = SortDirection.Ascending;
     private bool _isBusy;
 
-    public GridViewModel(FileViewerSession session)
+    public GridViewModel(FileViewerSession session, GridPreferences? preferences = null)
     {
         Session = session;
+        Preferences = preferences ?? new GridPreferences();
+        Preferences.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(GridPreferences.PageSize)) ApplyPageSizePreference();
+        };
         Selection.Changed += OnSelectionChanged;
         Rows = new VirtualizingRowCollection(session, Selection);
         Rows.CollectionChanged += (_, _) =>
@@ -61,6 +66,9 @@ public sealed class GridViewModel : ObservableObject
             OnPropertyChanged(nameof(TotalRowCount));
             OnPropertyChanged(nameof(CanGoToPreviousPage));
             OnPropertyChanged(nameof(CanGoToNextPage));
+            OnPropertyChanged(nameof(RowRangeLabel));
+            OnPropertyChanged(nameof(PageNumberText));
+            OnPropertyChanged(nameof(IsPagingActive));
             OnPropertyChanged(nameof(MatchCount));
             OnPropertyChanged(nameof(HasMatches));
             OnPropertyChanged(nameof(HasHighlight));
@@ -89,7 +97,14 @@ public sealed class GridViewModel : ObservableObject
 
         PreviousPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex - 1), () => CanGoToPreviousPage && !IsBusy);
         NextPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageIndex + 1), () => CanGoToNextPage && !IsBusy);
+        FirstPageCommand = RelayCommand.Create(() => Rows.GoToPage(0), () => CanGoToPreviousPage && !IsBusy);
+        LastPageCommand = RelayCommand.Create(() => Rows.GoToPage(Rows.PageCount - 1), () => CanGoToNextPage && !IsBusy);
+
+        ApplyPageSizePreference();
     }
+
+    /// <summary>Row-count and paging settings shared with every other open grid — see <see cref="GridPreferences"/>.</summary>
+    public GridPreferences Preferences { get; }
 
     public FileViewerSession Session { get; }
     public VirtualizingRowCollection Rows { get; }
@@ -332,6 +347,62 @@ public sealed class GridViewModel : ObservableObject
         set => SetField(ref _columnSearchText, value);
     }
 
+    /// <summary>The rows-per-page choices offered in the pagination bar.</summary>
+    public IReadOnlyList<PageSizeOption> PageSizeOptions { get; } = PageSizeOption.All;
+
+    /// <summary>
+    /// How many rows to show at once. Shared across grids (see <see cref="Preferences"/>), so the
+    /// choice holds for the next file too.
+    /// </summary>
+    public PageSizeOption SelectedPageSize
+    {
+        get => Preferences.PageSize;
+        set
+        {
+            if (value is null || value == Preferences.PageSize) return;
+            Preferences.PageSize = value; // raises back into ApplyPageSizePreference
+        }
+    }
+
+    /// <summary>True while the page size is measured from the window, which is what lets MainWindow keep it in step with resizes.</summary>
+    public bool IsPageSizeFitToWindow => SelectedPageSize.Kind == PageSizeKind.FitToWindow;
+
+    /// <summary>False when every row is on one page, so the page buttons can step aside rather than sit there disabled and meaningless.</summary>
+    public bool IsPagingActive => !Rows.ShowsAllRows;
+
+    /// <summary>"Showing 51–100 of 2,000,000" — what is actually on screen, which a page number alone doesn't say.</summary>
+    public string RowRangeLabel => TotalRowCount == 0
+        ? "No rows"
+        : $"Showing {Rows.FirstRowNumberOnPage:N0}–{Rows.LastRowNumberOnPage:N0} of {TotalRowCount:N0}";
+
+    private void ApplyPageSizePreference()
+    {
+        OnPropertyChanged(nameof(SelectedPageSize));
+        OnPropertyChanged(nameof(IsPageSizeFitToWindow));
+
+        // Fit-to-window is measured by the window, which reapplies it whenever the grid is laid out;
+        // the others are exact and can be set straight away.
+        if (!IsPageSizeFitToWindow)
+        {
+            Rows.SetPageSize(SelectedPageSize.RowsPerPage);
+        }
+
+        OnPropertyChanged(nameof(IsPagingActive));
+    }
+
+    /// <summary>Jumps to a 1-based page number typed into the pagination bar; anything unparseable or out of range is ignored.</summary>
+    public void GoToPageNumber(string text)
+    {
+        if (int.TryParse(text, out int pageNumber))
+        {
+            Rows.GoToPage(pageNumber - 1);
+        }
+        OnPropertyChanged(nameof(PageNumberText));
+    }
+
+    /// <summary>The current page number, as the jump box shows it.</summary>
+    public string PageNumberText => (PageIndex + 1).ToString("N0");
+
     public int PageIndex => Rows.PageIndex;
     public int PageCount => Rows.PageCount;
     public int TotalRowCount => Rows.TotalRowCount;
@@ -352,6 +423,8 @@ public sealed class GridViewModel : ObservableObject
     public ICommand ClearAllFiltersCommand { get; }
     public ICommand PreviousPageCommand { get; }
     public ICommand NextPageCommand { get; }
+    public ICommand FirstPageCommand { get; }
+    public ICommand LastPageCommand { get; }
 
     /// <summary>Invoked from the DataGrid's Sorting event (column header click). Toggles ascending/descending on repeated clicks of the same column. No-ops while <see cref="IsBusy"/> — the caller (MainWindow) doesn't need its own guard.</summary>
     public async Task SortByColumnAsync(string columnName)
@@ -544,11 +617,9 @@ public sealed class GridViewModel : ObservableObject
 
     private void OnSelectionChanged()
     {
-        // Bulk selection changes (select all / clear all / a checkbox toggle) don't change row
-        // membership or order, so a full Invalidate() (which also resets to page 0) would be
-        // overkill — RefreshCurrentPage() just forces the currently-visible checkboxes to re-read
-        // the new state.
-        Rows.RefreshCurrentPage();
+        // Selection changes don't affect row membership or order, so nothing about the collection
+        // needs rebuilding — the visible checkboxes just need to re-read their state.
+        Rows.RefreshSelectionVisuals();
         OnPropertyChanged(nameof(SelectedCount));
         CommandManager.InvalidateRequerySuggested();
     }

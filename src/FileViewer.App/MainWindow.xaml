@@ -405,24 +405,48 @@
             </Border>
 
             <!-- ============================== Pagination bar ========================== -->
+            <!-- "Rows per page" goes up to "All rows", which turns paging off entirely: the grid
+                 realizes only the rows on screen and rows are read and decoded only when asked for,
+                 so showing everything is a scroll, not a load. The page buttons hide themselves in
+                 that mode rather than sitting there disabled. -->
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
-                <Grid Margin="16,8">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="{Binding Grid.TotalRowCount, StringFormat='{}{0:N0} record(s)'}"
+                <DockPanel Margin="16,8">
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Grid.RowRangeLabel}"
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
                         <TextBlock Text="Filtering…" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
                                    Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
                                    Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="ROWS PER PAGE" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0" />
+                        <ComboBox MinWidth="128" VerticalAlignment="Center"
+                                  ItemsSource="{Binding Grid.PageSizeOptions}" SelectedItem="{Binding Grid.SelectedPageSize}"
+                                  ToolTip="How many rows to show at once. 'All rows' scrolls through the whole result set."
+                                  AutomationProperties.Name="Rows per page" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="{Binding Grid.IsPagingActive, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}">
+                        <Button Content="«" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" ToolTip="First page"
+                                Command="{Binding Grid.FirstPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
                         <Button Content="‹ Previous" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.PreviousPageCommand}" IsEnabled="{Binding Grid.CanGoToPreviousPage}" />
-                        <TextBlock Text="{Binding Grid.PageLabel}" VerticalAlignment="Center" Margin="12,0"
-                                   FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBox x:Name="PageNumberBox" Width="60" Margin="8,0,0,0" VerticalAlignment="Center"
+                                 HorizontalContentAlignment="Center" Padding="6,5"
+                                 Text="{Binding Grid.PageNumberText, Mode=OneWay}"
+                                 KeyDown="OnPageNumberBoxKeyDown" LostFocus="OnPageNumberBoxLostFocus"
+                                 ToolTip="Type a page number and press Enter" AutomationProperties.Name="Page number" />
+                        <TextBlock Text="{Binding Grid.PageCount, StringFormat='of {0:N0}'}" VerticalAlignment="Center" Margin="8,0,8,0"
+                                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" />
                         <Button Content="Next ›" Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding Grid.NextPageCommand}" IsEnabled="{Binding Grid.CanGoToNextPage}" />
+                        <Button Content="»" Style="{StaticResource ToolbarButtonStyle}" Padding="10,6" ToolTip="Last page"
+                                Command="{Binding Grid.LastPageCommand}" IsEnabled="{Binding Grid.CanGoToNextPage}" />
                     </StackPanel>
-                </Grid>
+                </DockPanel>
             </Border>
 
             <!-- ============================== Grid / welcome screen ==================== -->

@@ -14,7 +14,7 @@ namespace FileViewer.App.ViewModels;
 /// structural scan plus the rows of whichever sections are actually looked at, rather than indexing
 /// all ten up front to show one.
 /// </summary>
-public sealed class FileSectionViewModel(DifSection section) : ObservableObject, IDisposable
+public sealed class FileSectionViewModel(DifSection section, GridPreferences preferences) : ObservableObject, IDisposable
 {
     private FileViewerSession? _session;
     private GridViewModel? _grid;
@@ -54,7 +54,7 @@ public sealed class FileSectionViewModel(DifSection section) : ObservableObject,
     {
         _session?.Dispose();
         _session = session;
-        Grid = new GridViewModel(session);
+        Grid = new GridViewModel(session, preferences);
     }
 
     public void Dispose()

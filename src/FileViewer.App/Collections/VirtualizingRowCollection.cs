@@ -54,7 +54,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     private SearchQuery _searchQuery = SearchQuery.Empty;
     private long[]? _customOrderOverride;
     private int _pageIndex;
-    private int _pageSize = DefaultPageSize;
+    private int? _pageSize = DefaultPageSize;
     private readonly Dictionary<string, HashSet<string>> _columnValueFilters = new();
     private readonly Dictionary<string, ColumnPatternFilter> _columnPatternFilters = new();
 
@@ -65,6 +65,9 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     /// model that had to resolve (and therefore decode) the row all over again.
     /// </summary>
     private readonly Dictionary<long, RowViewModel> _pageRowCache = new();
+
+    /// <summary>Ceiling on <see cref="_pageRowCache"/>. Comfortably more than any screenful, small enough that scrolling a multi-million-row page can't grow it without bound.</summary>
+    private const int MaxCachedRowViewModels = 4096;
 
     private CancellationTokenSource? _recomputeCts;
 
@@ -78,8 +81,24 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
 
     public int TotalRowCount => EffectiveOrder.Length;
     public int PageIndex => _pageIndex;
-    public int PageSize => _pageSize;
+    /// <summary>
+    /// Rows exposed at once. Null means "no paging" — every row that passed the filters is on one
+    /// page, and WPF's own row virtualization does the work: it realizes only the rows on screen and
+    /// this collection only ever resolves (and therefore reads and decodes) the ones it is asked
+    /// for. That is what makes "All rows" over a multi-million-row file a scroll rather than a load.
+    /// </summary>
+    public int PageSize => _pageSize ?? Math.Max(1, EffectiveOrder.Length);
+
+    /// <summary>True when every row is on one page — see <see cref="PageSize"/>.</summary>
+    public bool ShowsAllRows => _pageSize is null;
+
     public int PageCount => Math.Max(1, (int)Math.Ceiling(EffectiveOrder.Length / (double)PageSize));
+
+    /// <summary>1-based number of the first row on the current page, for the "showing 51–100 of N" label. 0 when there are no rows.</summary>
+    public int FirstRowNumberOnPage => EffectiveOrder.Length == 0 ? 0 : (_pageIndex * PageSize) + 1;
+
+    /// <summary>1-based number of the last row on the current page.</summary>
+    public int LastRowNumberOnPage => (_pageIndex * PageSize) + Count;
 
     /// <summary>The main search's current (possibly multi-term) query — for the "what am I filtering by" summary.</summary>
     public SearchQuery CurrentSearchQuery => _searchQuery;
@@ -163,12 +182,33 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     }
 
     /// <summary>
-    /// Forces the grid to re-query every row on the current page (fresh <see cref="RowViewModel"/>
-    /// instances) without touching the effective order, page index, or scroll position — used
-    /// after a bulk selection change (select all / clear all) so on-screen checkboxes reflect it
-    /// immediately, without the page-reset side effect <see cref="Invalidate"/> would cause.
+    /// Tells the rows currently on screen to re-read their selection state, after a bulk change
+    /// (select all / clear all) that the individual checkbox bindings wouldn't hear about.
+    ///
+    /// Deliberately not a collection reset: resetting makes the grid throw away and regenerate every
+    /// container, which also throws away the scroll position. That was survivable when a page was
+    /// twenty rows; with every row on one page it would fling the user back to the top of the file
+    /// for something as small as ticking a box.
     /// </summary>
-    public void RefreshCurrentPage() => RaiseReset();
+    public void RefreshSelectionVisuals()
+    {
+        foreach (RowViewModel row in _pageRowCache.Values)
+        {
+            row.RefreshSelection();
+        }
+    }
+
+    /// <summary>
+    /// Re-reads one row after it was edited through something other than the grid (the record
+    /// dialog), leaving the scroll position and everything else alone.
+    /// </summary>
+    public void RefreshRow(long rowIndex)
+    {
+        if (_pageRowCache.TryGetValue(rowIndex, out RowViewModel? row))
+        {
+            row.Refresh();
+        }
+    }
 
     /// <summary>Moves to a different page of the *current* effective order without recomputing it.</summary>
     public void GoToPage(int pageIndex)
@@ -180,19 +220,22 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     }
 
     /// <summary>
-    /// Changes how many rows one page holds — driven by MainWindow measuring how many rows actually
-    /// fit in the DataGrid's current visible height, so a page fills the available screen space
-    /// instead of being pinned to a fixed row count. Keeps the current page index valid against the
-    /// new page count but otherwise leaves the effective order/scroll target alone — resizing the
-    /// window shouldn't discard an active filter or sort, or jump back to page 0.
+    /// Changes how many rows one page holds — either a fixed count, a count MainWindow measured from
+    /// the DataGrid's visible height, or null for "every row on one page". Keeps the current page
+    /// index valid against the new page count but otherwise leaves the effective order alone:
+    /// resizing the window, or asking for more rows, shouldn't discard an active filter or sort.
     /// </summary>
-    public void SetPageSize(int pageSize)
+    public void SetPageSize(int? pageSize)
     {
-        int clamped = Math.Max(1, pageSize);
+        int? clamped = pageSize is int rows ? Math.Max(1, rows) : null;
         if (clamped == _pageSize) return;
 
+        // Keep the first row of the current page in view across the change, rather than jumping to
+        // a page number that means something different now. Going to "all rows" starts at the top.
+        int firstVisibleRow = _pageIndex * PageSize;
+
         _pageSize = clamped;
-        _pageIndex = Math.Clamp(_pageIndex, 0, PageCount - 1);
+        _pageIndex = clamped is int newSize ? Math.Clamp(firstVisibleRow / newSize, 0, PageCount - 1) : 0;
         RaiseReset();
     }
 
@@ -272,8 +315,8 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
     /// </summary>
     public RowViewModel? GetRowAtPosition(int position)
     {
-        int offset = position - (_pageIndex * PageSize);
-        return offset >= 0 && offset < Count ? RowAtPageOffset(offset) : null;
+        long offset = position - (_pageIndex * (long)PageSize);
+        return offset >= 0 && offset < Count ? RowAtPageOffset((int)offset) : null;
     }
 
     /// <summary>Every row index currently matching the active search/column filters, across every page — the full set "select all" should act on, not just the page currently on screen.</summary>
@@ -400,7 +443,7 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
         CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
 
-    private long RowIndexAtPageOffset(int pageOffset) => EffectiveOrder[_pageIndex * PageSize + pageOffset];
+    private long RowIndexAtPageOffset(int pageOffset) => EffectiveOrder[checked((_pageIndex * (long)PageSize) + pageOffset)];
 
     private RowViewModel RowAtPageOffset(int pageOffset)
     {
@@ -410,12 +453,20 @@ public sealed class VirtualizingRowCollection(FileViewerSession session, RowSele
             return existing;
         }
 
+        // With paging this only ever holds one page; with every row on one page it would otherwise
+        // grow for as long as the user keeps scrolling, so it is capped. Dropping it wholesale is
+        // fine — the entries are a scroll-time convenience, not state.
+        if (_pageRowCache.Count >= MaxCachedRowViewModels)
+        {
+            _pageRowCache.Clear();
+        }
+
         var row = new RowViewModel(session, rowIndex, selection, _compiledHighlight);
         _pageRowCache[rowIndex] = row;
         return row;
     }
 
-    public int Count => Math.Min(PageSize, Math.Max(0, EffectiveOrder.Length - _pageIndex * PageSize));
+    public int Count => (int)Math.Min(PageSize, Math.Max(0, EffectiveOrder.Length - (_pageIndex * (long)PageSize)));
 
     public object? this[int index]
     {

@@ -28,6 +28,9 @@ public sealed class AppSettings
     /// <summary>Most recently opened file paths, newest first.</summary>
     public List<string> RecentFiles { get; set; } = [];
 
+    /// <summary>Rows shown per page: a row count, 0 for "fit to window", -1 for "all rows". Null until the user picks one.</summary>
+    public int? RowsPerPage { get; set; }
+
     public static string SettingsFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "BloombergFileViewer",
