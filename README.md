@@ -124,6 +124,8 @@ like-for-like.
 
 Run `benchmarks/FileViewer.Benchmarks` for the maintained versions of these measurements.
 
+Release notes live in [CHANGELOG.md](CHANGELOG.md).
+
 ## Project layout
 
 ```
