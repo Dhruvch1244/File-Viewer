@@ -114,4 +114,55 @@ public class UnmanagedArrayTests
         Assert.Equal((nuint)0, array.Count);
         Assert.Equal(capacityBeforeClear, array.Capacity);
     }
+
+    [Fact]
+    public void GetWritableSpan_WritesLandAtTheGivenOffset()
+    {
+        using var array = new UnmanagedArray<TestItem>(initialCapacity: 8);
+
+        Span<TestItem> first = array.GetWritableSpan(start: 0, length: 3);
+        for (int i = 0; i < 3; i++) first[i] = new TestItem { Value = i };
+
+        Span<TestItem> second = array.GetWritableSpan(start: 3, length: 2);
+        for (int i = 0; i < 2; i++) second[i] = new TestItem { Value = 100 + i };
+
+        array.SetCount(5);
+
+        Assert.Equal((nuint)5, array.Count);
+        Assert.Equal([0, 1, 2, 100, 101], array.AsSpan().ToArray().Select(t => t.Value));
+    }
+
+    [Fact]
+    public void SetCount_BeyondCapacity_Throws()
+    {
+        using var array = new UnmanagedArray<TestItem>(initialCapacity: 4);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => array.SetCount(5));
+    }
+
+    [Fact]
+    public void GetWritableSpan_ConcurrentDisjointWriters_ProduceNoCorruption()
+    {
+        // Mirrors how FileIndexer's chunk merge fills a pre-sized merged array: many workers, each
+        // writing only its own known, non-overlapping slice, then one SetCount call at the end.
+        const int workerCount = 8;
+        const int itemsPerWorker = 50_000;
+        using var array = new UnmanagedArray<TestItem>(initialCapacity: (nuint)(workerCount * itemsPerWorker));
+
+        Parallel.For(0, workerCount, worker =>
+        {
+            Span<TestItem> slice = array.GetWritableSpan((nuint)(worker * itemsPerWorker), itemsPerWorker);
+            for (int i = 0; i < itemsPerWorker; i++)
+            {
+                slice[i] = new TestItem { Value = worker * itemsPerWorker + i };
+            }
+        });
+        array.SetCount((nuint)(workerCount * itemsPerWorker));
+
+        Assert.Equal((nuint)(workerCount * itemsPerWorker), array.Count);
+        for (int i = 0; i < workerCount * itemsPerWorker; i++)
+        {
+            Assert.Equal(i, array[i].Value);
+        }
+    }
 }

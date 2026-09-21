@@ -258,4 +258,19 @@ public class DifSectionScannerTests
 
         Assert.DoesNotContain(layout.Sections, section => section.Name.StartsWith("Section ", StringComparison.Ordinal));
     }
+
+    [Theory]
+    [InlineData(3_000_000_000L, 4096)] // routine bulk-export size; used to overflow before narrowing to int
+    [InlineData((long)int.MaxValue + 1, 4096)] // smallest value that overflowed
+    [InlineData(int.MaxValue, 4096)] // largest value that never overflowed, still clamped correctly
+    [InlineData(2000L, 2000)] // a real file smaller than the 4096 probe cap is not over-read
+    [InlineData(0L, 0)]
+    public void LineEndingProbeLength_ClampsWithoutOverflowingOnFilesLargerThanIntMaxValue(long sourceLength, int expected)
+    {
+        // The regression this guards: this clamp used to narrow the whole file's length to int
+        // before Math.Min got a chance to bound it, so any bulk file over ~2.1 GB (a routine size
+        // for a real Bloomberg bulk export) threw OverflowException during Scan() and never opened
+        // at all, rather than just being slow to index.
+        Assert.Equal(expected, DifSectionScanner.LineEndingProbeLength(sourceLength));
+    }
 }

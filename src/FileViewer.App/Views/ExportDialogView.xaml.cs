@@ -292,10 +292,14 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
         new(path, FileMode.Create, FileAccess.Write, FileShare.None, 256 * 1024, FileOptions.SequentialScan);
 
     /// <summary>
-    /// Writes one file per section of a bulk file, named for the section. A section already open
-    /// exports the rows its own grid is showing (its filters, sort and edits); a section never
-    /// opened is indexed here, on the fly, and exports in full — so "every section" doesn't
-    /// quietly skip the ones that were never looked at.
+    /// Writes one file per section of a bulk file, named for the section. Every section exports in
+    /// full — every data record, edits included — regardless of whether it was ever opened, and
+    /// regardless of any filter left active on its grid: "every section" means every row of every
+    /// section, the same guarantee a user gets from CurrentView on an unfiltered grid, not a scope
+    /// that quietly shrinks depending on what was last clicked while browsing. (A user who wants the
+    /// filtered subset of the section they're looking at already has that in CurrentView.) A section
+    /// already open still exports through its own live <see cref="FileViewerSession"/> so its edits
+    /// and any active sort are reflected; a section never opened is indexed here, on the fly.
     /// </summary>
     private async Task ExportEverySectionAsync(string directory, ExportFormatKind format, string formatToken, CancellationToken cancellationToken)
     {
@@ -309,8 +313,8 @@ public partial class ExportDialogView : Window, INotifyPropertyChanged
 
             if (section.Grid is { } sectionGrid)
             {
-                List<long> rows = [.. sectionGrid.Rows.GetAllRowIndices()];
                 FileViewerSession session = sectionGrid.Session;
+                List<long> rows = [.. session.GetExportRowOrder()];
                 var progress = new Progress<long>(written => ReportProgress(written, rows.Count, fileName));
                 await Task.Run(() =>
                 {

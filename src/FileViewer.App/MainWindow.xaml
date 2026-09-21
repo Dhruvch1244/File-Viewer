@@ -471,7 +471,7 @@
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Text="{Binding Grid.RowRangeLabel}"
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
-                        <TextBlock Text="Filtering…" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
+                        <TextBlock Text="{Binding Grid.BusyStatusText, FallbackValue=Working…}" Margin="10,0,0,0" FontSize="12" FontStyle="Italic"
                                    Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
                                    Visibility="{Binding Grid.IsBusy, Converter={StaticResource BoolToVisibilityConverter}, FallbackValue=Collapsed}" />
                         <Button Content="Stop" Style="{StaticResource ToolbarButtonStyle}" Padding="8,3" FontSize="11" Margin="8,0,0,0"

@@ -49,6 +49,7 @@ public sealed class GridViewModel : ObservableObject
     private string? _currentSortColumn;
     private SortDirection _currentSortDirection = SortDirection.Ascending;
     private bool _isBusy;
+    private string _busyStatusText = "Working…";
 
     public GridViewModel(FileViewerSession session, GridPreferences? preferences = null, IReadOnlyList<long>? restrictedRows = null)
     {
@@ -89,17 +90,17 @@ public sealed class GridViewModel : ObservableObject
             ColumnNames.Select((name, index) => new GridColumnInfo(name, index) { IsVisible = index < DefaultVisibleColumnCount }));
 
         ClearSortCommand = RelayCommand.Create(ClearSort, () => CurrentSortColumn is not null && !IsBusy);
-        AddRowCommand = RelayCommand.Create(AddRow, () => !IsBusy);
-        DuplicateSelectedRowCommand = RelayCommand.Create(DuplicateSelectedRow, () => SelectedRow is not null && !IsBusy);
-        DeleteSelectedRowsCommand = RelayCommand.Create(DeleteSelectedRows, () => Selection.Count > 0 && !IsBusy);
-        UndoCommand = RelayCommand.Create(() => { Session.Overlay.Undo(); Rows.Invalidate(); }, () => Session.Overlay.CanUndo && !IsBusy);
+        AddRowCommand = new AsyncRelayCommand(AddRowAsync, () => !IsBusy);
+        DuplicateSelectedRowCommand = new AsyncRelayCommand(DuplicateSelectedRowAsync, () => SelectedRow is not null && !IsBusy);
+        DeleteSelectedRowsCommand = new AsyncRelayCommand(DeleteSelectedRowsAsync, () => Selection.Count > 0 && !IsBusy);
+        UndoCommand = new AsyncRelayCommand(UndoAsync, () => Session.Overlay.CanUndo && !IsBusy);
 
         ApplySearchCommand = new AsyncRelayCommand(ApplySearchAsync, () => !IsBusy);
         AddSearchTermCommand = new AsyncRelayCommand(AddSearchTermAsync, () => !IsBusy && !string.IsNullOrEmpty(SearchText));
         ClearSearchCommand = new AsyncRelayCommand(
-            () => { SearchText = string.Empty; return RunBusyAsync(() => ApplyQueryAsync(SearchQuery.Empty)); }, () => !IsBusy);
+            () => { SearchText = string.Empty; return RunBusyAsync(() => ApplyQueryAsync(SearchQuery.Empty), "Clearing search…"); }, () => !IsBusy);
         ClearAllFiltersCommand = new AsyncRelayCommand(
-            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ClearAllFiltersAsync()); }, () => !IsBusy && HasActiveFilters);
+            () => { SearchText = string.Empty; return RunBusyAsync(() => Rows.ClearAllFiltersAsync(), "Clearing filters…"); }, () => !IsBusy && HasActiveFilters);
         NextMatchCommand = RelayCommand.Create(() => GoToMatch(1), () => HasMatches);
         PreviousMatchCommand = RelayCommand.Create(() => GoToMatch(-1), () => HasMatches);
 
@@ -143,6 +144,18 @@ public sealed class GridViewModel : ObservableObject
                 CommandManager.InvalidateRequerySuggested();
             }
         }
+    }
+
+    /// <summary>
+    /// What <see cref="IsBusy"/> is currently doing — "Filtering…", "Deleting…", "Undoing…" — so the
+    /// status line the toolbar shows next to it says what is actually happening instead of a
+    /// generic spinner. Meaningless while <see cref="IsBusy"/> is false; not reset on completion
+    /// since nothing reads it in that state.
+    /// </summary>
+    public string BusyStatusText
+    {
+        get => _busyStatusText;
+        private set => SetField(ref _busyStatusText, value);
     }
 
     /// <summary>Every currently-active filter, in a form the toolbar can render as removable chips — the "what am I filtering by" summary.</summary>
@@ -257,7 +270,7 @@ public sealed class GridViewModel : ObservableObject
             // rather than starting a second overlapping one.
             if (!IsBusy && ActiveQuery.Criteria.Count > 1)
             {
-                _ = RunBusyAsync(() => ApplyQueryAsync(ActiveQuery with { Combine = CurrentCombineMode }));
+                _ = RunBusyAsync(() => ApplyQueryAsync(ActiveQuery with { Combine = CurrentCombineMode }), "Filtering…");
             }
         }
     }
@@ -547,7 +560,7 @@ public sealed class GridViewModel : ObservableObject
                 List<long> sorted = await Task.Run(
                     () => RowSorter.SortByColumn(candidates, columnName, direction, Session.FileIndex, Session.Overlay, Session.Cache));
                 Rows.ApplyCustomOrder([.. sorted]);
-            });
+            }, "Sorting…");
         }
 
         CurrentSortColumn = columnName;
@@ -563,11 +576,11 @@ public sealed class GridViewModel : ObservableObject
 
     /// <summary>Sets (or clears) the ag-Grid-style per-column filter row's pattern for one column. No-ops while <see cref="IsBusy"/> — a fast-typing user's earlier keystroke won't be applied out of order after a later one.</summary>
     public Task SetColumnPatternFilterAsync(string columnName, string? pattern, bool useRegex) =>
-        IsBusy ? Task.CompletedTask : RunBusyAsync(() => Rows.SetColumnPatternFilterAsync(columnName, pattern, useRegex));
+        IsBusy ? Task.CompletedTask : RunBusyAsync(() => Rows.SetColumnPatternFilterAsync(columnName, pattern, useRegex), "Filtering…");
 
     /// <summary>Sets (or clears) an Excel-style column value filter. No-ops while <see cref="IsBusy"/>.</summary>
     public Task SetColumnValueFilterAsync(string columnName, HashSet<string>? allowedValues) =>
-        IsBusy ? Task.CompletedTask : RunBusyAsync(() => Rows.SetColumnValueFilterAsync(columnName, allowedValues));
+        IsBusy ? Task.CompletedTask : RunBusyAsync(() => Rows.SetColumnValueFilterAsync(columnName, allowedValues), "Filtering…");
 
     /// <summary>
     /// Every distinct value a column takes, for the Excel-style filter popup — decodes every
@@ -578,7 +591,7 @@ public sealed class GridViewModel : ObservableObject
     public Task<DistinctValueResult> GetDistinctValuesForColumnAsync(string columnName) =>
         IsBusy
             ? Task.FromResult(new DistinctValueResult([], false))
-            : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName));
+            : RunBusyAsync(() => Rows.GetDistinctValuesForColumnAsync(columnName), "Loading values…");
 
     /// <summary>
     /// Rows past this are not copied. The clipboard is a single string held twice over (here and in
@@ -742,11 +755,12 @@ public sealed class GridViewModel : ObservableObject
     public Task<ColumnStatistics> GetColumnStatisticsAsync(string columnName) =>
         IsBusy
             ? Task.FromResult(ColumnStatistics.Empty(columnName))
-            : RunBusyAsync(() => Rows.GetColumnStatisticsAsync(columnName));
+            : RunBusyAsync(() => Rows.GetColumnStatisticsAsync(columnName), "Computing statistics…");
 
-    /// <summary>Runs a background filter/sort computation with <see cref="IsBusy"/> set for its duration.</summary>
-    private async Task RunBusyAsync(Func<Task> operation)
+    /// <summary>Runs a background computation with <see cref="IsBusy"/> set (and <see cref="BusyStatusText"/> describing it) for its duration.</summary>
+    private async Task RunBusyAsync(Func<Task> operation, string status = "Working…")
     {
+        BusyStatusText = status;
         IsBusy = true;
         try
         {
@@ -758,9 +772,10 @@ public sealed class GridViewModel : ObservableObject
         }
     }
 
-    /// <summary>Same as <see cref="RunBusyAsync(Func{Task})"/> but for an operation that returns a value.</summary>
-    private async Task<T> RunBusyAsync<T>(Func<Task<T>> operation)
+    /// <summary>Same as <see cref="RunBusyAsync(Func{Task}, string)"/> but for an operation that returns a value.</summary>
+    private async Task<T> RunBusyAsync<T>(Func<Task<T>> operation, string status = "Working…")
     {
+        BusyStatusText = status;
         IsBusy = true;
         try
         {
@@ -782,21 +797,21 @@ public sealed class GridViewModel : ObservableObject
             int index = i; // captured per chip: removing one term must not disturb the others
             ActiveFilterChips.Add(new ActiveFilterChip(
                 query.Criteria[i].Describe(),
-                () => RunBusyAsync(() => Rows.ApplySearchAsync(Rows.CurrentSearchQuery.RemoveAt(index)))));
+                () => RunBusyAsync(() => Rows.ApplySearchAsync(Rows.CurrentSearchQuery.RemoveAt(index)), "Filtering…")));
         }
 
         foreach ((string columnName, HashSet<string> allowedValues) in Rows.ColumnValueFilters)
         {
             ActiveFilterChips.Add(new ActiveFilterChip(
                 $"{columnName}: {allowedValues.Count} selected",
-                () => RunBusyAsync(() => Rows.SetColumnValueFilterAsync(columnName, null))));
+                () => RunBusyAsync(() => Rows.SetColumnValueFilterAsync(columnName, null), "Filtering…")));
         }
 
         foreach ((string columnName, ColumnPatternFilter filter) in Rows.ColumnPatternFilters)
         {
             string label = filter.UseRegex ? $"{columnName} ~ /{filter.Pattern}/" : $"{columnName}: \"{filter.Pattern}\"";
             ActiveFilterChips.Add(new ActiveFilterChip(
-                label, () => RunBusyAsync(() => Rows.SetColumnPatternFilterAsync(columnName, null, filter.UseRegex))));
+                label, () => RunBusyAsync(() => Rows.SetColumnPatternFilterAsync(columnName, null, filter.UseRegex), "Filtering…")));
         }
 
         OnPropertyChanged(nameof(HasActiveFilters));
@@ -812,7 +827,7 @@ public sealed class GridViewModel : ObservableObject
         SearchQuery query = string.IsNullOrEmpty(SearchText)
             ? SearchQuery.Empty
             : new SearchQuery([BuildCriterion()], CurrentCombineMode);
-        return RunBusyAsync(() => ApplyQueryAsync(query));
+        return RunBusyAsync(() => ApplyQueryAsync(query), "Searching…");
     }
 
     /// <summary>Adds the typed term to the search instead of replacing it, then clears the box ready for the next one.</summary>
@@ -822,7 +837,7 @@ public sealed class GridViewModel : ObservableObject
 
         SearchQuery query = (ActiveQuery with { Combine = CurrentCombineMode }).Add(BuildCriterion());
         SearchText = string.Empty;
-        return RunBusyAsync(() => ApplyQueryAsync(query));
+        return RunBusyAsync(() => ApplyQueryAsync(query), "Searching…");
     }
 
     /// <summary>The terms currently in force, from whichever of the two modes is active.</summary>
@@ -847,19 +862,19 @@ public sealed class GridViewModel : ObservableObject
     /// </summary>
     private List<long> CollectBaseAndAddedRowIndices() => [.. Rows.GetBaseRowOrder()];
 
-    private void AddRow()
+    private Task AddRowAsync()
     {
         Session.Overlay.AddRow(Session.FileIndex.Header.ColumnNames);
-        Rows.Invalidate();
+        return RunBusyAsync(() => Rows.InvalidateAsync(), "Adding row…");
     }
 
-    private void DuplicateSelectedRow()
+    private Task DuplicateSelectedRowAsync()
     {
-        if (SelectedRow is not { } selected) return;
+        if (SelectedRow is not { } selected) return Task.CompletedTask;
         Core.Overlay.ResolvedRow? resolved = Session.Resolve(selected.RowIndex);
-        if (resolved is null) return; // shouldn't happen for a currently-visible row, but stay defensive
+        if (resolved is null) return Task.CompletedTask; // shouldn't happen for a currently-visible row, but stay defensive
         Session.Overlay.DuplicateRow(resolved.FieldValues);
-        Rows.Invalidate();
+        return RunBusyAsync(() => Rows.InvalidateAsync(), "Duplicating row…");
     }
 
     /// <summary>
@@ -880,21 +895,27 @@ public sealed class GridViewModel : ObservableObject
         CommandManager.InvalidateRequerySuggested();
     }
 
-    private void DeleteSelectedRows()
+    private Task DeleteSelectedRowsAsync()
     {
         // Materialized here, against the rows currently in view — in select-all mode the selection
         // is a rule rather than a list until something acts on it.
         Session.Overlay.BulkDelete([.. Selection.Resolve(Rows.GetAllRowIndices())]);
         Selection.Clear();
-        Rows.Invalidate();
+        return RunBusyAsync(() => Rows.InvalidateAsync(), "Deleting…");
+    }
+
+    private Task UndoAsync()
+    {
+        Session.Overlay.Undo();
+        return RunBusyAsync(() => Rows.InvalidateAsync(), "Undoing…");
     }
 
     /// <summary>Deletes one specific record immediately — the per-row trash-can button, independent of checkbox selection/Delete.</summary>
-    public void DeleteRow(long rowIndex)
+    public Task DeleteRowAsync(long rowIndex)
     {
         Session.Overlay.DeleteRow(rowIndex);
         Selection.SetSelected(rowIndex, false);
-        Rows.Invalidate();
+        return RunBusyAsync(() => Rows.InvalidateAsync(), "Deleting…");
     }
 }
 

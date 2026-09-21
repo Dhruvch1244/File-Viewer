@@ -582,10 +582,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Per-row "Delete" button — removes this one record immediately, independent of checkbox selection.</summary>
-    private void OnDeleteRowClick(object sender, RoutedEventArgs e)
+    private async void OnDeleteRowClick(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: RowViewModel row } || _viewModel.Grid is not { } grid) return;
-        grid.DeleteRow(row.RowIndex);
+        await grid.DeleteRowAsync(row.RowIndex);
     }
 
     /// <summary>

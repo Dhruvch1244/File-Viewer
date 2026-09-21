@@ -6,8 +6,12 @@ namespace FileViewer.Core.Native;
 /// A growable array of unmanaged structs backed by <see cref="NativeMemory"/> rather than the GC
 /// heap. Used for the row index and sort-key arrays (<see cref="RowIndexEntry"/>,
 /// <see cref="SortKey"/>) so a multi-million-row index never triggers Gen2/LOH collections.
-/// Not thread-safe for concurrent <see cref="Add"/> calls — callers must serialize appends (the
-/// indexing pipeline merges parallel-scan results into this array from a single thread).
+/// <see cref="Add"/> and <see cref="EnsureCapacity"/> are not thread-safe — callers must serialize
+/// calls that can grow the array. <see cref="GetWritableSpan"/> is the one exception: multiple
+/// threads may call it concurrently on *disjoint* offset ranges within a capacity already reserved
+/// up front (no growth involved), which is how the indexer's chunk merge writes every chunk's rows
+/// into their final position in parallel; the writer is responsible for the ranges not overlapping,
+/// and for calling <see cref="SetCount"/> only after every writer has finished.
 /// </summary>
 public sealed unsafe class UnmanagedArray<T> : IDisposable where T : unmanaged
 {
@@ -90,6 +94,30 @@ public sealed unsafe class UnmanagedArray<T> : IDisposable where T : unmanaged
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return new Span<T>(_pointer + start, length);
+    }
+
+    /// <summary>
+    /// A writable span into already-reserved capacity at an arbitrary offset, for a caller that is
+    /// about to fill several disjoint ranges concurrently (e.g. one worker per chunk writing its own
+    /// slice of a shared merged array) and will call <see cref="SetCount"/> once every writer has
+    /// finished. Does not touch <see cref="Count"/> itself — the offset can be, and during concurrent
+    /// writes usually is, beyond the current count.
+    /// </summary>
+    public Span<T> GetWritableSpan(nuint start, int length)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return new Span<T>(_pointer + start, length);
+    }
+
+    /// <summary>
+    /// Sets <see cref="Count"/> directly, for a caller that filled reserved capacity itself (via
+    /// <see cref="GetWritableSpan"/>) rather than through <see cref="Add"/>.
+    /// </summary>
+    public void SetCount(nuint count)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (count > _capacity) throw new ArgumentOutOfRangeException(nameof(count));
+        _count = count;
     }
 
     public void Dispose()
