@@ -996,8 +996,26 @@
                                  much the rest of the popup (sort row, match-by-text, truncation notice)
                                  needs above it — previously this could be squeezed down to a single row
                                  with no visual cue there was more to scroll to. -->
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MinHeight="170">
-                                <ItemsControl x:Name="ColumnFilterValuesList">
+                            <!-- VirtualizingStackPanel + CanContentScroll: without them (the state this was
+                                 in), ItemsControl builds a full CheckBox+TextBlock visual tree for every item
+                                 up front regardless of what's scrolled into view — and this list can hold up to
+                                 DistinctValueResult's collection cap (10,000) for a column like a price or an
+                                 ID. Opening the popup on one of those meant building 10,000 live WPF elements
+                                 at once for a handful actually on screen, the one place in this app that wasn't
+                                 virtualized the way the main grid always has been. IsVirtualizingWhenGrouping
+                                 isn't needed (this list is never grouped); Recycling reuses containers during
+                                 scroll rather than churning them, same as RowsDataGrid. -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MinHeight="170"
+                                          CanContentScroll="True">
+                                <ItemsControl x:Name="ColumnFilterValuesList"
+                                              VirtualizingPanel.IsVirtualizing="True"
+                                              VirtualizingPanel.VirtualizationMode="Recycling"
+                                              VirtualizingPanel.ScrollUnit="Pixel">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <VirtualizingStackPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <!-- A plain string Content has nothing to stop a long value running past
