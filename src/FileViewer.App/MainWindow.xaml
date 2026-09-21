@@ -946,6 +946,40 @@
                                 <Button Content="Cancel" Style="{StaticResource ToolbarButtonStyle}" Padding="10,5" Click="OnColumnFilterCancelClick" Margin="0,0,8,0" />
                                 <Button Content="Apply" Style="{StaticResource PrimaryButtonStyle}" Padding="14,5" Click="OnColumnFilterApplyClick" />
                             </StackPanel>
+                            <!-- Restores what a merge with a parallel fix for this same popup's scroll bug
+                                 silently dropped: a way to narrow a long value list, and to select or
+                                 deselect all of it at once rather than clicking every checkbox by hand.
+                                 The code behind these (OnColumnFilterSelectAllClick/ClearClick,
+                                 _activeFilterOptionsView) was never removed — only the buttons and search
+                                 box that called it were, leaving it dead. -->
+                            <TextBlock DockPanel.Dock="Top" Text="OR PICK FROM VALUES" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,4" />
+                            <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+                                <TextBox x:Name="ColumnFilterSearchBox" TextChanged="OnColumnFilterSearchChanged"
+                                         AutomationProperties.Name="Search values"
+                                         ToolTip="Narrows the list below. Select all / Deselect all then apply to just what the search leaves showing." />
+                                <TextBlock Text="Search values…" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnFilterSearchBox}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <!-- Both act on whatever the search box above leaves showing, so narrowing to
+                                 "EQ" then Select all picks just the EQ-prefixed values rather than every
+                                 value in the column. -->
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterSelectAllClick"
+                                        ToolTip="Tick every value currently listed" />
+                                <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnColumnFilterClearClick"
+                                        ToolTip="Untick every value currently listed" />
+                            </StackPanel>
                             <!-- Shown from the moment the popup opens until the (background) distinct-value
                                  lookup finishes — the popup is fully open and interactive immediately, it
                                  just doesn't have values to show yet, instead of freezing until it does. -->
