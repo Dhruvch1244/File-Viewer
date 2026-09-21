@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using FileViewer.Core.Dif;
 
@@ -33,6 +34,16 @@ public sealed class RowPredicateSet
 
     /// <summary>True when the whole set can be answered from a row's raw bytes — see <see cref="CompiledSearchQuery.SupportsRawMatching"/>. Only the search query has a raw form; any column filter forces the decoded path.</summary>
     public bool SupportsRawMatching => _valueFilters.Length == 0 && _patternFilters.Length == 0 && _search.SupportsRawMatching;
+
+    /// <summary>
+    /// True when every active predicate is a column-scoped value/pattern filter and there is no
+    /// free-text search term — the search scans every column, so it needs the full row decoded
+    /// regardless, but a value/pattern filter only ever looks at its own column. When this holds,
+    /// <see cref="MatchesColumnsOnly"/> can answer the row from just the columns those filters
+    /// reference, instead of materializing every column as a string the way <see cref="Matches"/>'s
+    /// caller (a full <c>DifRowParser.ParseRow</c>) does.
+    /// </summary>
+    public bool SupportsColumnScopedMatching => _search.IsEmpty;
 
     public static RowPredicateSet Compile(
         SearchQuery search,
@@ -91,6 +102,32 @@ public sealed class RowPredicateSet
     /// <summary>Only valid when <see cref="SupportsRawMatching"/> is true and the row carries no overlay edits.</summary>
     public bool MatchesRaw(ReadOnlySpan<byte> rowBytes) => _search.MatchesRaw(rowBytes);
 
+    /// <summary>
+    /// Matches using only the columns the active value/pattern filters reference, decoding just
+    /// those fields instead of every column in the row (see <see cref="SupportsColumnScopedMatching"/>).
+    /// Only valid when <see cref="SupportsColumnScopedMatching"/> is true and the row carries no
+    /// overlay edits (an edited row's raw file bytes no longer reflect its current value).
+    /// </summary>
+    public bool MatchesColumnsOnly(ReadOnlySpan<byte> rowBytes, byte delimiter, Encoding encoding)
+    {
+        if (_valueFilters.Length == 0 && _patternFilters.Length == 0) return true;
+
+        ReadOnlySpan<byte> trimmed = DifLineScanner.TrimTrailingCr(rowBytes);
+        int fieldCount = DifRowParser.CountFields(trimmed, delimiter);
+        Span<Range> ranges = fieldCount <= 64 ? stackalloc Range[fieldCount] : new Range[fieldCount];
+        DifRowParser.SplitFieldsInto(trimmed, delimiter, ranges);
+
+        foreach (ValuePredicate predicate in _valueFilters)
+        {
+            if (!predicate.MatchesRaw(trimmed, ranges, encoding)) return false;
+        }
+        foreach (PatternPredicate predicate in _patternFilters)
+        {
+            if (!predicate.MatchesRaw(trimmed, ranges, encoding)) return false;
+        }
+        return true;
+    }
+
     /// <summary>True when some of the search can reject rows before they are decoded — see <see cref="CompiledSearchQuery.HasRawPrefilter"/>.</summary>
     public bool HasRawPrefilter => _search.HasRawPrefilter;
 
@@ -101,6 +138,9 @@ public sealed class RowPredicateSet
     {
         public bool Matches(IReadOnlyList<string> fields) =>
             allowedValues.Contains(columnIndex < fields.Count ? fields[columnIndex] : string.Empty);
+
+        public bool MatchesRaw(ReadOnlySpan<byte> trimmedLine, ReadOnlySpan<Range> ranges, Encoding encoding) =>
+            allowedValues.Contains(FieldValue(trimmedLine, ranges, columnIndex, encoding));
     }
 
     private readonly struct PatternPredicate(int columnIndex, string pattern, Regex? regex, bool invalidRegex)
@@ -111,7 +151,17 @@ public sealed class RowPredicateSet
             string value = columnIndex < fields.Count ? fields[columnIndex] : string.Empty;
             return regex is not null ? regex.IsMatch(value) : value.Contains(pattern, StringComparison.OrdinalIgnoreCase);
         }
+
+        public bool MatchesRaw(ReadOnlySpan<byte> trimmedLine, ReadOnlySpan<Range> ranges, Encoding encoding)
+        {
+            if (invalidRegex) return false;
+            string value = FieldValue(trimmedLine, ranges, columnIndex, encoding);
+            return regex is not null ? regex.IsMatch(value) : value.Contains(pattern, StringComparison.OrdinalIgnoreCase);
+        }
     }
+
+    private static string FieldValue(ReadOnlySpan<byte> trimmedLine, ReadOnlySpan<Range> ranges, int columnIndex, Encoding encoding) =>
+        columnIndex < ranges.Length ? encoding.GetString(trimmedLine[ranges[columnIndex]]) : string.Empty;
 }
 
 /// <summary>A single column's text/regex filter — the ag-Grid-style "floating filter row" entry.</summary>

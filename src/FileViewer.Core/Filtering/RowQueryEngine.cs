@@ -113,10 +113,10 @@ public static class RowQueryEngine
 
             if (!overlayIsEmpty && snapshot.GetRowState(rowIndex) == RowState.Deleted) continue; // tombstone
 
-            IReadOnlyList<string>? fields = reader.GetFields(rowIndex);
-            if (fields is null) continue;
+            string? value = reader.GetField(rowIndex, columnIndex);
+            if (value is null) continue;
 
-            distinct.Add(columnIndex < fields.Count ? fields[columnIndex] : string.Empty);
+            distinct.Add(value);
             if (distinct.Count >= maxValues)
             {
                 truncated = true;
@@ -140,7 +140,12 @@ public static class RowQueryEngine
     {
         bool overlayIsEmpty = snapshot.IsEmpty;
         bool matchOnRawAlone = predicates.SupportsRawMatching;
-        bool prefilterOnRaw = !matchOnRawAlone && predicates.HasRawPrefilter;
+        // Column value/pattern filters with no free-text search term active: every candidate column
+        // is known up front, so a row can be answered by decoding only those columns instead of
+        // every column DifRowParser.ParseRow would materialize (see RowPredicateSet.MatchesColumnsOnly).
+        bool columnScopedOnly = !matchOnRawAlone && !predicates.IsEmpty && predicates.SupportsColumnScopedMatching;
+        bool prefilterOnRaw = !matchOnRawAlone && !columnScopedOnly && predicates.HasRawPrefilter;
+        byte delimiter = (byte)fileIndex.Header.Delimiter;
 
         using var reader = new ScanRowReader(fileIndex, snapshot, cache, ScanRowReader.IsAscending(rowIndices, start, end));
         for (int i = start; i < end; i++)
@@ -156,11 +161,17 @@ public static class RowQueryEngine
                 continue;
             }
 
-            if ((matchOnRawAlone || prefilterOnRaw) && reader.TryReadRawRow(rowIndex, out ReadOnlySpan<byte> raw))
+            if ((matchOnRawAlone || columnScopedOnly || prefilterOnRaw) && reader.TryReadRawRow(rowIndex, out ReadOnlySpan<byte> raw))
             {
                 if (matchOnRawAlone)
                 {
                     if (predicates.MatchesRaw(raw)) destination.Add(rowIndex);
+                    continue;
+                }
+
+                if (columnScopedOnly)
+                {
+                    if (predicates.MatchesColumnsOnly(raw, delimiter, DifFormatOptions.TextEncoding)) destination.Add(rowIndex);
                     continue;
                 }
 
