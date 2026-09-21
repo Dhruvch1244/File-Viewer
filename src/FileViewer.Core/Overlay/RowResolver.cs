@@ -59,20 +59,30 @@ public static class RowResolver
             cache?.Set(rowIndex, new DecodedRow(rowIndex, parsed));
         }
 
-        string[] resolvedFields = [.. baseFields]; // defensive copy — never mutate a cached/template array in place
-
+        // The defensive copy only actually needs to happen once there is an edit to apply — most
+        // rows in a real file never have one, and this is called for every row a filter/sort pass
+        // decodes, every row a large export writes, and every row the grid renders. Copying
+        // unconditionally meant paying for a full array allocation + element copy on the hot path
+        // for the common case that goes on to do nothing with it. baseFields itself is never
+        // mutated below: resolvedFields only ever becomes a fresh array, never baseFields cast back
+        // to string[], so the original "never mutate a cached/template array in place" guarantee
+        // still holds — it just isn't paid for until the first edit is actually found.
+        IReadOnlyList<string> resolvedFields = baseFields;
         bool hasEdits = false;
         if (overlay.TryGetCellEdits(rowIndex, out IReadOnlyList<CellEdit> edits))
         {
+            string[]? mutableFields = null;
             foreach (CellEdit edit in edits)
             {
                 int columnIndex = fileIndex.Header.ColumnIndexOf(edit.Column);
-                if (columnIndex >= 0 && columnIndex < resolvedFields.Length)
+                if (columnIndex >= 0 && columnIndex < baseFields.Count)
                 {
-                    resolvedFields[columnIndex] = edit.NewValue;
+                    mutableFields ??= [.. baseFields];
+                    mutableFields[columnIndex] = edit.NewValue;
                     hasEdits = true;
                 }
             }
+            if (mutableFields is not null) resolvedFields = mutableFields;
         }
 
         RowRenderState renderState = state switch

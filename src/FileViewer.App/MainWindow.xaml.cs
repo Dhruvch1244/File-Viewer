@@ -512,7 +512,7 @@ public partial class MainWindow : Window
 
     private void OnSelectAllColumnsClick(object sender, RoutedEventArgs e) => SetVisibilityForFilteredColumns(isVisible: true);
 
-    private void OnHideAllColumnsClick(object sender, RoutedEventArgs e) => SetVisibilityForFilteredColumns(isVisible: false);
+    private void OnDeselectAllColumnsClick(object sender, RoutedEventArgs e) => SetVisibilityForFilteredColumns(isVisible: false);
 
     /// <summary>Applies to whatever the column-search box currently shows (everything, if it's empty) — so searching "PRICE" then hitting "Hide all" only hides matching columns.</summary>
     private void SetVisibilityForFilteredColumns(bool isVisible)
@@ -940,6 +940,7 @@ public partial class MainWindow : Window
         _activeFilterOptions = [];
         _activeFilterOptionsView = null;
         ColumnFilterValuesList.ItemsSource = null;
+        ColumnFilterSearchBox.Text = string.Empty; // a leftover search term from the last column would otherwise silently hide values in this one
         ColumnFilterLoadingText.Visibility = Visibility.Visible;
         ColumnFilterTruncatedText.Visibility = Visibility.Collapsed;
 
@@ -1092,6 +1093,24 @@ public partial class MainWindow : Window
         await grid.SetColumnPatternFilterAsync(columnName, pattern, useRegex);
     }
 
+
+    /// <summary>
+    /// Narrows <see cref="ColumnFilterValuesList"/> to values whose text contains what's typed,
+    /// case-insensitively — the same live-as-you-type behaviour the Columns chooser's own search box
+    /// has. Select all / Deselect all act on <see cref="_activeFilterOptionsView"/>, i.e. only what
+    /// this filter currently leaves visible, which is what makes "search 'EQ', Select all" a way to
+    /// pick just a subset instead of everything.
+    /// </summary>
+    private void OnColumnFilterSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_activeFilterOptionsView is null) return;
+
+        string search = ColumnFilterSearchBox.Text;
+        _activeFilterOptionsView.Filter = string.IsNullOrEmpty(search)
+            ? null
+            : option => option is ColumnFilterValueOption value
+                && value.DisplayText.Contains(search, StringComparison.OrdinalIgnoreCase);
+    }
 
     private void OnColumnFilterSelectAllClick(object sender, RoutedEventArgs e)
     {
