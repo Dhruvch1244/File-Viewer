@@ -200,6 +200,17 @@ public sealed class VirtualizingRowCollection(
     }
 
     /// <summary>
+    /// Same effect as <see cref="Invalidate"/>, but the actual re-filter/re-sort pass (the same one
+    /// every other row-membership change already runs through <see cref="RecomputeAndInstallAsync"/>)
+    /// happens on a background thread instead of inline on whichever caller happens to next read
+    /// <see cref="TotalRowCount"/> or ask for a row — which on a large, actively-filtered file is the
+    /// very next UI redraw after <see cref="Invalidate"/> returns, freezing it with no warning. Used
+    /// after an edit-overlay change (add/duplicate/delete/undo) that can shift which rows currently
+    /// pass the active filters.
+    /// </summary>
+    public Task InvalidateAsync() => RecomputeAndInstallAsync();
+
+    /// <summary>
     /// Tells the rows currently on screen to re-read their selection state, after a bulk change
     /// (select all / clear all) that the individual checkbox bindings wouldn't hear about.
     ///

@@ -38,6 +38,16 @@ public static class DifSectionScanner
 
     public static string SynthesizeSectionName(int sectionIndex) => $"Section {sectionIndex + 1}";
 
+    /// <summary>
+    /// How many bytes of the file's head to read for line-ending detection: at most 4096, but never
+    /// more than the file actually has. Split out from its one call site because narrowing
+    /// <paramref name="sourceLength"/> — the whole file's size, which for a bulk export routinely
+    /// exceeds <see cref="int.MaxValue"/> — to <see langword="int"/> before <see cref="Math.Min"/>
+    /// ever got a chance to bound it used to overflow on any such file, so this stays long
+    /// arithmetic until the very end.
+    /// </summary>
+    internal static int LineEndingProbeLength(long sourceLength) => (int)Math.Min(4096L, sourceLength);
+
     public static DifFileLayout Scan(ReadOnlyMemory<byte> content) => Scan(DifByteSource.FromArray(content));
 
     /// <summary>
@@ -235,7 +245,7 @@ public static class DifSectionScanner
 
         // Read from the head of the file rather than tracked through the cursor, which trims the
         // carriage return off every line it hands back.
-        Span<byte> lineEndingProbe = stackalloc byte[Math.Min(4096, checked((int)source.Length))];
+        Span<byte> lineEndingProbe = stackalloc byte[LineEndingProbeLength(source.Length)];
         source.Read(lineEndingProbe, 0);
 
         return new DifFileLayout
