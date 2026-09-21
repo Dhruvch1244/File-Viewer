@@ -63,10 +63,9 @@ public static class ColumnStatisticsCalculator
             long rowIndex = rowIndices[i];
             if (!overlayIsEmpty && snapshot.GetRowState(rowIndex) == RowState.Deleted) continue;
 
-            IReadOnlyList<string>? fields = reader.GetFields(rowIndex);
-            if (fields is null) continue;
+            string? value = reader.GetField(rowIndex, columnIndex);
+            if (value is null) continue;
 
-            string value = columnIndex < fields.Count ? fields[columnIndex] : string.Empty;
             rowCount++;
 
             if (value.Length == 0)

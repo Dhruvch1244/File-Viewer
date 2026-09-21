@@ -105,6 +105,26 @@ internal sealed class ScanRowReader(FileIndex fileIndex, IOverlayView overlay, D
         return RowResolver.Resolve(rowIndex, fileIndex, overlay, cache)?.FieldValues;
     }
 
+    /// <summary>
+    /// One column's value for a row, or null if it is a tombstone — for a caller (distinct values,
+    /// column statistics) that only ever needs a single column and would otherwise pay
+    /// <see cref="GetFields"/>'s cost of decoding every one of them. An unedited row's raw bytes are
+    /// already in hand (or a cheap read-ahead away), so only that one field gets split out and
+    /// decoded; an edited/added row falls back to the normal resolved path, same as <see cref="GetFields"/>.
+    /// </summary>
+    public string? GetField(long rowIndex, int columnIndex)
+    {
+        if (cache is null && TryReadRawRow(rowIndex, out ReadOnlySpan<byte> raw))
+        {
+            ReadOnlySpan<byte> fieldBytes = DifRowParser.GetFieldSpan(raw, (byte)fileIndex.Header.Delimiter, columnIndex);
+            return DifFormatOptions.TextEncoding.GetString(fieldBytes);
+        }
+
+        IReadOnlyList<string>? fields = RowResolver.Resolve(rowIndex, fileIndex, overlay, cache)?.FieldValues;
+        if (fields is null) return null;
+        return columnIndex < fields.Count ? fields[columnIndex] : string.Empty;
+    }
+
     private void Grow(int required)
     {
         ArrayPool<byte>.Shared.Return(_rowBuffer);

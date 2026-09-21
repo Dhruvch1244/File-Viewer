@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Threading;
 using FileViewer.App.Logging;
 using FileViewer.App.Settings;
+using FileViewer.Core.Overlay;
 
 namespace FileViewer.App;
 
@@ -17,6 +18,7 @@ public partial class App : Application
         // The settings type lives in a UI-free assembly so it can be tested; this is where it gets
         // told how to report a failure.
         AppSettings.OnWarning = message => FileLogger.Instance.LogWarning(message);
+        OverlayRecoveryStore.OnWarning = message => FileLogger.Instance.LogWarning(message);
 
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;

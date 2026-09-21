@@ -199,6 +199,100 @@ public class SearchQueryTests
     }
 
     [Fact]
+    public async Task ValueFilterAlone_NoSearchTerm_UsesColumnScopedPath()
+    {
+        (FileIndex index, EditOverlay overlay, DecodedRowCache cache) = await OpenAsync();
+        using (index)
+        {
+            var valueFilters = new Dictionary<string, HashSet<string>> { ["PRICE"] = ["100.50", "99.75"] };
+            RowPredicateSet predicates = RowPredicateSet.Compile(SearchQuery.Empty, valueFilters, null, index.Header);
+
+            Assert.True(predicates.SupportsColumnScopedMatching);
+            Assert.Equal([0L, 2L], RowQueryEngine.Filter([0, 1, 2], predicates, index, overlay, cache));
+        }
+    }
+
+    [Fact]
+    public async Task PatternFilterAlone_NoSearchTerm_UsesColumnScopedPath()
+    {
+        (FileIndex index, EditOverlay overlay, DecodedRowCache cache) = await OpenAsync();
+        using (index)
+        {
+            var patternFilters = new Dictionary<string, ColumnPatternFilter> { ["_ID"] = new("SEC00[13]", UseRegex: true) };
+            RowPredicateSet predicates = RowPredicateSet.Compile(SearchQuery.Empty, null, patternFilters, index.Header);
+
+            Assert.True(predicates.SupportsColumnScopedMatching);
+            Assert.Equal([0L, 2L], RowQueryEngine.Filter([0, 1, 2], predicates, index, overlay, cache));
+        }
+    }
+
+    [Fact]
+    public async Task ValueAndPatternFilterAlone_BothMustMatch()
+    {
+        (FileIndex index, EditOverlay overlay, DecodedRowCache cache) = await OpenAsync();
+        using (index)
+        {
+            var valueFilters = new Dictionary<string, HashSet<string>> { ["_ERR"] = ["0"] };
+            var patternFilters = new Dictionary<string, ColumnPatternFilter> { ["PRICE"] = new("^10", UseRegex: true) };
+            RowPredicateSet predicates = RowPredicateSet.Compile(SearchQuery.Empty, valueFilters, patternFilters, index.Header);
+
+            Assert.True(predicates.SupportsColumnScopedMatching);
+            Assert.Equal([0L, 1L], RowQueryEngine.Filter([0, 1, 2], predicates, index, overlay, cache));
+        }
+    }
+
+    [Fact]
+    public async Task ValueFilterAlone_EditedRow_MatchesEditedValueNotFileBytes()
+    {
+        // The column-scoped fast path only ever applies to a row's raw file bytes; an edited row
+        // must still fall back so the filter sees the overlay value, not what's on disk.
+        (FileIndex index, EditOverlay overlay, DecodedRowCache cache) = await OpenAsync();
+        using (index)
+        {
+            overlay.EditCell(1, "PRICE", "99.75");
+            var valueFilters = new Dictionary<string, HashSet<string>> { ["PRICE"] = ["99.75"] };
+            RowPredicateSet predicates = RowPredicateSet.Compile(SearchQuery.Empty, valueFilters, null, index.Header);
+
+            Assert.Equal([1L, 2L], RowQueryEngine.Filter([0, 1, 2], predicates, index, overlay, cache));
+        }
+    }
+
+    [Fact]
+    public async Task ValueFilterAlone_AgreesWithDecodedReferenceAcrossRows()
+    {
+        // The column-scoped path extracts one field's raw bytes via a computed field-range table
+        // instead of decoding the whole row; this checks that table-based extraction picks out
+        // exactly the same values a full per-row decode would, across every row of a real file.
+        (FileIndex index, EditOverlay overlay, DecodedRowCache cache) = await OpenAsync("FixedIncomeAsia.dif");
+        using (index)
+        {
+            var rows = new List<long>();
+            for (long i = 0; i < (long)index.RowIndex.Count; i++) rows.Add(i);
+
+            int columnIndex = index.Header.ColumnIndexOf("_ID");
+            Assert.True(columnIndex >= 0);
+
+            // Pick an allowed set from actual decoded values so the reference and the fast path have
+            // something real to agree (or disagree) on, rather than trivially both returning empty.
+            var allowedValues = rows
+                .Select(r => RowResolver.Resolve(r, index, overlay, cache)!.FieldValues[columnIndex])
+                .Where((_, idx) => idx % 3 == 0)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var valueFilters = new Dictionary<string, HashSet<string>> { ["_ID"] = allowedValues };
+            RowPredicateSet predicates = RowPredicateSet.Compile(SearchQuery.Empty, valueFilters, null, index.Header);
+            Assert.True(predicates.SupportsColumnScopedMatching);
+
+            List<long> viaColumnScoped = RowQueryEngine.Filter(rows, predicates, index, overlay, cache);
+            List<long> reference = [.. rows.Where(r =>
+                allowedValues.Contains(RowResolver.Resolve(r, index, overlay, cache)!.FieldValues[columnIndex]))];
+
+            Assert.NotEmpty(viaColumnScoped);
+            Assert.Equal(reference, viaColumnScoped);
+        }
+    }
+
+    [Fact]
     public async Task DistinctValues_ReportWhenTheyHitTheCap()
     {
         (FileIndex index, EditOverlay overlay, DecodedRowCache cache) = await OpenAsync();

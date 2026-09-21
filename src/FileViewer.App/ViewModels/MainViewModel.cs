@@ -2,12 +2,14 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Windows.Input;
+using System.Windows.Threading;
 using FileViewer.App.Common;
 using FileViewer.App.Logging;
 using FileViewer.App.Settings;
 using FileViewer.App.Theme;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Indexing;
+using FileViewer.Core.Overlay;
 using FileViewer.Core.Session;
 
 namespace FileViewer.App.ViewModels;
@@ -32,6 +34,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private double _indexingProgressPercent;
     private bool _isIndexing;
     private bool _isDarkTheme = ThemeManager.Current == AppTheme.Dark;
+
+    /// <summary>How often unsaved edits are written to disk for crash recovery — frequent enough that a crash loses at most a handful of seconds of editing, rare enough that it's never the thing making the app feel slow.</summary>
+    private static readonly TimeSpan AutosaveInterval = TimeSpan.FromSeconds(20);
+    private readonly DispatcherTimer _autosaveTimer;
 
     public MainViewModel()
     {
@@ -68,6 +74,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         };
 
         RefreshRecentFiles();
+
+        _autosaveTimer = new DispatcherTimer { Interval = AutosaveInterval };
+        _autosaveTimer.Tick += (_, _) => AutosaveUnsavedEdits();
+        _autosaveTimer.Start();
     }
 
     /// <summary>Grid settings shared by every open tab and section — currently how many rows a page shows. See <see cref="GridPreferences"/>.</summary>
@@ -465,6 +475,107 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StatusMessage = $"Pulled {rows.Length:N0} row(s) into their own view.";
     }
 
+    /// <summary>
+    /// Opens an extracted view over a caller-chosen set of rows with a caller-supplied label — the
+    /// same mechanism <see cref="ExtractSelectionAsync"/> uses for "pull my selection into its own
+    /// view", reused by the file/section diff result to show "just the added/removed/changed rows"
+    /// as an ordinary, fully-interactive tab (filterable, sortable, exportable) rather than a
+    /// read-only report.
+    /// </summary>
+    public async Task ShowExtractedRowsAsync(
+        FileTabViewModel sourceTab, FileSectionViewModel sourceSection, FileViewerSession session, long[] rows, string titleSuffix)
+    {
+        FileTabViewModel extract = FileTabViewModel.CreateExtract(sourceTab, sourceSection, session, rows, Preferences, titleSuffix);
+        Tabs.Add(extract);
+        OnPropertyChanged(nameof(HasFileOpen));
+
+        await ActivateTabAsync(extract);
+    }
+
+    /// <summary>
+    /// Writes recovery data for every section currently holding unsaved edits — ticked by
+    /// <see cref="_autosaveTimer"/> so a crash, a forced kill, or a Windows update reboot loses at
+    /// most <see cref="AutosaveInterval"/> of editing instead of everything since the file was
+    /// opened. <see cref="OverlayRecoveryStore"/> never throws, so a locked/unwritable recovery
+    /// folder degrades to "no recovery data" rather than disrupting anything else.
+    /// </summary>
+    private void AutosaveUnsavedEdits()
+    {
+        foreach (FileTabViewModel tab in Tabs)
+        {
+            if (tab.IsExtract) continue; // shares its source tab's session/overlay — saved there instead
+
+            foreach (FileSectionViewModel section in tab.Sections)
+            {
+                if (section.Grid is not { } grid || !grid.Session.HasPendingEdits) continue;
+
+                var record = new OverlayRecoveryRecord(
+                    tab.FilePath, section.Index, DateTimeOffset.UtcNow, grid.Session.Overlay.CapturePersistedState());
+                OverlayRecoveryStore.Save(RecoveryPaths.Directory, record);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes whatever recovery data exists for <paramref name="tab"/>'s sections — called both
+    /// when a tab closes individually and when the whole app closes (<see cref="Dispose"/>). Both
+    /// callers only reach here once closing is actually going ahead — no pending edits, or the user
+    /// confirmed discarding them via <see cref="ConfirmDiscardingEdits"/> — so by the time this
+    /// runs, nothing is left recovery still needs to protect. A section with no Grid was either
+    /// never opened (never autosaved, nothing to remove) or just had its session detached to move to
+    /// another tab (see <see cref="OpenAllSectionsAsTabsAsync"/>) — that tab, not this one, owns its
+    /// recovery data now, so it is deliberately left alone here.
+    /// </summary>
+    private static void DeleteRecoveryData(FileTabViewModel tab)
+    {
+        if (tab.IsExtract) return;
+
+        foreach (FileSectionViewModel section in tab.Sections)
+        {
+            if (section.Grid is not null)
+            {
+                OverlayRecoveryStore.Delete(RecoveryPaths.Directory, tab.FilePath, section.Index);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens the file/section <paramref name="record"/> was captured from and replaces its overlay
+    /// with the recovered edits — the crash-recovery counterpart to <see cref="OpenFileAsync"/>.
+    /// Returns false if the file could no longer be opened (moved, deleted, no longer valid), in
+    /// which case the caller should give up on this record rather than retry it.
+    /// </summary>
+    public async Task<bool> OpenFileWithRecoveryAsync(OverlayRecoveryRecord record)
+    {
+        FileTabViewModel? tab = Tabs.FirstOrDefault(
+            t => !t.IsExtract && string.Equals(t.FilePath, record.SourceFilePath, StringComparison.OrdinalIgnoreCase));
+
+        if (tab is null)
+        {
+            await OpenFileAsync(record.SourceFilePath);
+            tab = Tabs.FirstOrDefault(
+                t => !t.IsExtract && string.Equals(t.FilePath, record.SourceFilePath, StringComparison.OrdinalIgnoreCase));
+            if (tab is null) return false;
+        }
+
+        FileSectionViewModel? section = tab.Sections.FirstOrDefault(s => s.Index == record.SectionIndex);
+        if (section is null) return false;
+
+        if (!section.IsLoaded)
+        {
+            await ShowSectionAsync(tab, section);
+        }
+        if (section.Grid is not { } grid) return false;
+
+        grid.Session.Overlay.RestorePersistedState(record.Overlay);
+        await grid.Rows.InvalidateAsync();
+
+        tab.ActiveSection = section;
+        await ActivateTabAsync(tab);
+        StatusMessage = $"Recovered unsaved edits for '{tab.FileName}'.";
+        return true;
+    }
+
     /// <summary>Closes whichever tab is on screen — Ctrl+W.</summary>
     public void CloseActiveTab() => CloseTab(ActiveTab);
 
@@ -493,6 +604,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             CloseTab(extract);
         }
         tab.ExtractedFrom?.Extracts.Remove(tab);
+
+        DeleteRecoveryData(tab);
 
         int closedIndex = Tabs.IndexOf(tab);
         Tabs.Remove(tab);
@@ -531,10 +644,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _autosaveTimer.Stop();
         ThemeManager.ThemeChanged -= _themeChangedHandler;
         _indexingCts?.Cancel();
         _indexingCts?.Dispose();
         _indexingCts = null;
+
+        // Reached only once the window has actually decided to close (OnClosing already asked about
+        // unsaved edits and wasn't cancelled) — so, same as an individual CloseTab, there is nothing
+        // left here for recovery to protect.
+        foreach (FileTabViewModel tab in Tabs)
+        {
+            DeleteRecoveryData(tab);
+        }
 
         // Extracted views share the session of the tab they came from, so they have to go first —
         // disposing a source while one still reads through it would leave it pointing at a closed file.
