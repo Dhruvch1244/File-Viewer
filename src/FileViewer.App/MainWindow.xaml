@@ -687,12 +687,34 @@
                 </Border.Effect>
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="COLUMNS" Style="{StaticResource SectionLabelStyle}" Margin="4,0,4,8" />
-                    <TextBox DockPanel.Dock="Top" Margin="0,0,0,8"
-                             Text="{Binding Grid.ColumnSearchText, UpdateSourceTrigger=PropertyChanged}" />
-                    <!-- Act on whatever the search box above currently shows — with no search text that's every column. -->
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <TextBox x:Name="ColumnChooserSearchBox"
+                                 Text="{Binding Grid.ColumnSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="Search columns" />
+                        <TextBlock Text="Search columns…" Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text.Length, ElementName=ColumnChooserSearchBox}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                    <!-- "Deselect all" rather than "Hide all": the values-filter popup uses Select
+                         all/Deselect all for the same tick-a-checkbox action, and a column's checkbox
+                         being unchecked is exactly what "hides" it — the same word for the same
+                         action everywhere beats two words for one. Both act on whatever the search box
+                         above currently shows, so an empty search means every column. -->
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnSelectAllColumnsClick" />
-                        <Button Content="Hide all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnHideAllColumnsClick" />
+                        <Button Content="Select all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnSelectAllColumnsClick"
+                                ToolTip="Show every column currently listed" />
+                        <Button Content="Deselect all" Style="{StaticResource ToolbarButtonStyle}" Padding="8,4" FontSize="12" Click="OnDeselectAllColumnsClick"
+                                ToolTip="Hide every column currently listed" />
                     </StackPanel>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding Grid.Columns}">
