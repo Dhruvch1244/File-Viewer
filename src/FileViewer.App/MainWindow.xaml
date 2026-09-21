@@ -260,6 +260,8 @@
                                         ToolTip="Other ways to copy — without headers, as CSV, or every row in view" />
                                 <Button x:Name="FileInfoButton" Content="File info" Style="{StaticResource ToolbarButtonStyle}" Click="OnFileInfoClick"
                                         ToolTip="Header metadata, section details and any parser warnings for this file" />
+                                <Button x:Name="CompareButton" Content="Compare" Style="{StaticResource ToolbarButtonStyle}" Click="OnCompareClick"
+                                        ToolTip="Compare this section against another open file or section, matched by a key column" />
                             </StackPanel>
                         </Border>
 
@@ -267,7 +269,9 @@
 
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="FROZEN COLUMNS" Style="{StaticResource SectionLabelStyle}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBox Width="34" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" HorizontalContentAlignment="Center" />
+                            <TextBox Width="34" Text="{Binding Grid.FrozenColumnCount, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" HorizontalContentAlignment="Center"
+                                     ToolTip="How many columns (left to right) stay pinned while scrolling horizontally"
+                                     KeyDown="OnFrozenColumnsKeyDown" />
                         </StackPanel>
                     </StackPanel>
                 </DockPanel>

@@ -13,10 +13,12 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using FileViewer.App.Collections;
 using FileViewer.App.Logging;
+using FileViewer.App.Settings;
 using FileViewer.App.ViewModels;
 using FileViewer.App.Views;
 using FileViewer.Core.Dif;
 using FileViewer.Core.Filtering;
+using FileViewer.Core.Overlay;
 using FileViewer.Core.Sorting;
 using FileViewer.Core.Statistics;
 using Microsoft.Win32;
@@ -62,6 +64,9 @@ public partial class MainWindow : Window
     /// <summary>The 3 bars of each data column's header "menu" icon (see <see cref="BuildColumnMenuIcon"/>) — recolored to the accent brush by <see cref="UpdateColumnHeaderText"/> while that column has an active Excel-style value filter, mirroring the "●" text indicator.</summary>
     private readonly Dictionary<string, Rectangle[]> _columnMenuIconBars = new();
 
+    /// <summary>Recovery is checked once per process, not once per window — "New Window" opens a second <see cref="MainWindow"/> without a second offer to recover the same leftover edits.</summary>
+    private static bool s_recoveryChecked;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -80,6 +85,12 @@ public partial class MainWindow : Window
     {
         Loaded -= OnWindowLoaded;
 
+        if (!s_recoveryChecked)
+        {
+            s_recoveryChecked = true;
+            await OfferRecoveryAsync();
+        }
+
         // Skip element 0: that is this executable's own path, not a file to open.
         foreach (string argument in Environment.GetCommandLineArgs().Skip(1))
         {
@@ -87,6 +98,54 @@ public partial class MainWindow : Window
             if (!File.Exists(argument)) continue;
 
             await _viewModel.OpenFileAsync(argument);
+        }
+    }
+
+    /// <summary>
+    /// Once per process launch: if a previous run left unsaved-edit recovery data behind (a crash,
+    /// a forced kill, a Windows update reboot — anything that skipped <see cref="OnClosing"/>'s
+    /// clean-shutdown path, which is what normally removes it), offer to reopen each affected file
+    /// with those edits restored. Asked one file at a time rather than as a single "recover
+    /// everything" prompt, since declining one shouldn't silently decide the others too.
+    /// </summary>
+    private async Task OfferRecoveryAsync()
+    {
+        IReadOnlyList<OverlayRecoveryRecord> records = OverlayRecoveryStore.LoadAll(RecoveryPaths.Directory);
+        if (records.Count == 0) return;
+
+        foreach (OverlayRecoveryRecord record in records)
+        {
+            if (record.Overlay.IsEmpty || !File.Exists(record.SourceFilePath))
+            {
+                // Nothing to recover, or the source file is gone (moved/deleted) — either way there
+                // is nothing left this record can still do for the user.
+                OverlayRecoveryStore.Delete(RecoveryPaths.Directory, record.SourceFilePath, record.SectionIndex);
+                continue;
+            }
+
+            bool recover = MessageBox.Show(
+                $"Bloomberg File Viewer found unsaved edits for '{System.IO.Path.GetFileName(record.SourceFilePath)}' " +
+                $"from a previous session (saved {record.SavedAtUtc.ToLocalTime():g}) — likely left behind " +
+                "by a crash or a forced close rather than a normal exit.\n\nRecover them?",
+                "Bloomberg File Viewer",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.Yes) == MessageBoxResult.Yes;
+
+            if (!recover)
+            {
+                OverlayRecoveryStore.Delete(RecoveryPaths.Directory, record.SourceFilePath, record.SectionIndex);
+                continue;
+            }
+
+            if (!await _viewModel.OpenFileWithRecoveryAsync(record))
+            {
+                MessageBox.Show(
+                    $"Could not reopen '{System.IO.Path.GetFileName(record.SourceFilePath)}' to recover its edits.",
+                    "Bloomberg File Viewer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
     }
 
@@ -535,6 +594,14 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
     }
 
+    private void OnCompareClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.ActiveTab is not { ActiveSection: { Grid: not null } section } tab) return;
+
+        var dialog = new CompareFilesDialogView(_viewModel, tab, section) { Owner = this };
+        dialog.ShowDialog();
+    }
+
     private void OnSearchTextBoxKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || _viewModel.Grid is not { } grid) return;
@@ -586,6 +653,19 @@ public partial class MainWindow : Window
     {
         if (sender is not FrameworkElement { DataContext: RowViewModel row } || _viewModel.Grid is not { } grid) return;
         await grid.DeleteRowAsync(row.RowIndex);
+    }
+
+    /// <summary>
+    /// The Frozen Columns box commits on LostFocus (see its binding) rather than per keystroke — a
+    /// per-keystroke commit fought the user while typing, since the bound setter clamps to the
+    /// column count and every clamp snapped the box's own text back mid-edit. Enter commits
+    /// immediately instead of making the user click elsewhere first.
+    /// </summary>
+    private void OnFrozenColumnsKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || sender is not TextBox textBox) return;
+        textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        e.Handled = true;
     }
 
     /// <summary>

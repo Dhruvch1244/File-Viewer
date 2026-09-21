@@ -297,4 +297,85 @@ public class EditOverlayTests
             Assert.True(overlay.TryGetAddedRowTemplate(index, out _));
         }
     }
+
+    [Fact]
+    public void CapturePersistedState_OnAnUntouchedOverlay_IsEmpty()
+    {
+        var overlay = new EditOverlay();
+
+        Assert.True(overlay.CapturePersistedState().IsEmpty);
+    }
+
+    [Fact]
+    public void CapturePersistedState_ThenRestoreOnAFreshOverlay_ReproducesCellEdits()
+    {
+        var overlay = new EditOverlay();
+        overlay.EditCell(3, "PRICE", "100.00");
+        overlay.EditCell(3, "PRICE", "200.00");
+        overlay.EditCell(5, "_ID", "RENAMED");
+
+        OverlayPersistedState captured = overlay.CapturePersistedState();
+        var restored = new EditOverlay();
+        restored.RestorePersistedState(captured);
+
+        Assert.True(restored.TryGetCellEdits(3, out IReadOnlyList<CellEdit> priceEdits));
+        Assert.Equal(["100.00", "200.00"], priceEdits.Select(e => e.NewValue));
+        Assert.True(restored.TryGetCellEdits(5, out IReadOnlyList<CellEdit> idEdits));
+        Assert.Equal("RENAMED", idEdits[0].NewValue);
+    }
+
+    [Fact]
+    public void CapturePersistedState_ThenRestore_ReproducesAddedAndDeletedRows()
+    {
+        var overlay = new EditOverlay();
+        long added = overlay.AddRow(Columns);
+        overlay.EditCell(added, "_ID", "NEW_ROW");
+        overlay.DeleteRow(1);
+
+        OverlayPersistedState captured = overlay.CapturePersistedState();
+        var restored = new EditOverlay();
+        restored.RestorePersistedState(captured);
+
+        Assert.Equal(RowState.Added, restored.GetRowState(added));
+        Assert.True(restored.TryGetAddedRowTemplate(added, out _));
+        // The cell edit landed on the added row's template, not baked into it — same as an
+        // unrestored overlay, resolution (not the raw template) is where the two are merged.
+        Assert.True(restored.TryGetCellEdits(added, out IReadOnlyList<CellEdit> addedRowEdits));
+        Assert.Equal("NEW_ROW", addedRowEdits[0].NewValue);
+        Assert.Equal(RowState.Deleted, restored.GetRowState(1));
+
+        // A synthetic index minted after restore must not collide with the recovered one.
+        long secondAdded = restored.AddRow(Columns);
+        Assert.NotEqual(added, secondAdded);
+    }
+
+    [Fact]
+    public void CapturePersistedState_ThenRestore_ReproducesLiveAddedRowsForRowOrdering()
+    {
+        // GetLiveAddedOrDuplicatedRowIndices drives every base-row-order builder (export, the
+        // grid's row list); it walks the row-op history, not _addedRowData directly, so restoring
+        // has to rebuild that history too, not just the current field values.
+        var overlay = new EditOverlay();
+        long first = overlay.AddRow(Columns);
+        long second = overlay.DuplicateRow(["A", "B", "C"]);
+
+        var restored = new EditOverlay();
+        restored.RestorePersistedState(overlay.CapturePersistedState());
+
+        Assert.Equal([first, second], restored.GetLiveAddedOrDuplicatedRowIndices());
+    }
+
+    [Fact]
+    public void RestorePersistedState_StartsWithAnEmptyUndoStack()
+    {
+        // Recovery restores the data, not the ability to step further back than the recovery
+        // point — the original session's undo history is gone along with the session that crashed.
+        var overlay = new EditOverlay();
+        overlay.EditCell(1, "PRICE", "100.00");
+
+        var restored = new EditOverlay();
+        restored.RestorePersistedState(overlay.CapturePersistedState());
+
+        Assert.False(restored.CanUndo);
+    }
 }

@@ -57,6 +57,68 @@ public sealed class EditOverlay : IOverlayView
     }
 
     /// <summary>
+    /// Captures enough of the current state to reconstruct it later via
+    /// <see cref="RestorePersistedState"/> — not the undo history, just what the user would
+    /// currently see. Used for crash-recovery persistence (<see cref="OverlayRecoveryStore"/>):
+    /// written out periodically so unsaved edits survive the app closing without a clean export.
+    /// </summary>
+    public OverlayPersistedState CapturePersistedState()
+    {
+        lock (_gate)
+        {
+            if (_rowOps.Count == 0 && _cellEdits.Count == 0) return OverlayPersistedState.Empty;
+
+            var cellEdits = new Dictionary<long, CellEdit[]>(_cellEdits.Count);
+            foreach ((long rowIndex, List<CellEdit> edits) in _cellEdits)
+            {
+                cellEdits[rowIndex] = [.. edits];
+            }
+            return new OverlayPersistedState(
+                [.. _rowOps],
+                new Dictionary<long, RowState>(_rowStateIndex),
+                cellEdits,
+                new Dictionary<long, string[]>(_addedRowData),
+                _nextSyntheticIndex);
+        }
+    }
+
+    /// <summary>
+    /// Replaces this overlay's current state with a previously captured one — restoring unsaved
+    /// edits after a crash. Only safe to call on a freshly opened overlay: it replaces everything
+    /// rather than merging. The undo stack starts empty; recovery restores the data, not the
+    /// ability to step back further than the recovery point.
+    /// </summary>
+    public void RestorePersistedState(OverlayPersistedState state)
+    {
+        lock (_gate)
+        {
+            _rowOps.Clear();
+            _rowOps.AddRange(state.RowOps);
+
+            _rowStateIndex.Clear();
+            foreach ((long rowIndex, RowState rowState) in state.RowStates)
+            {
+                _rowStateIndex[rowIndex] = rowState;
+            }
+
+            _cellEdits.Clear();
+            foreach ((long rowIndex, CellEdit[] edits) in state.CellEdits)
+            {
+                _cellEdits[rowIndex] = [.. edits];
+            }
+
+            _addedRowData.Clear();
+            foreach ((long rowIndex, string[] fields) in state.AddedRows)
+            {
+                _addedRowData[rowIndex] = fields;
+            }
+
+            _nextSyntheticIndex = state.NextSyntheticIndex;
+            _undo.Clear();
+        }
+    }
+
+    /// <summary>
     /// Freezes the current overlay state into a lock-free <see cref="OverlaySnapshot"/>. Taken once
     /// per filter/sort/export scan so that walking millions of rows doesn't take this lock twice per
     /// row — see <see cref="IOverlayView"/>.

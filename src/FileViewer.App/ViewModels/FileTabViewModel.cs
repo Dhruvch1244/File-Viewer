@@ -31,12 +31,15 @@ public sealed class FileTabViewModel : ObservableObject, IDisposable
         FileSectionViewModel sourceSection,
         FileViewerSession sharedSession,
         IReadOnlyList<long> rows,
-        GridPreferences preferences)
+        GridPreferences preferences,
+        string? titleSuffix = null)
     {
         var tab = new FileTabViewModel(source.FilePath, source.Layout, preferences, singleSection: sourceSection.Index)
         {
             ExtractedFrom = source,
-            _title = $"{Path.GetFileName(source.FilePath)} · {rows.Count:N0} row(s)",
+            _title = titleSuffix is null
+                ? $"{Path.GetFileName(source.FilePath)} · {rows.Count:N0} row(s)"
+                : $"{Path.GetFileName(source.FilePath)} · {rows.Count:N0} {titleSuffix}",
         };
 
         tab.Sections[0].AttachExtractedRows(sharedSession, rows);
