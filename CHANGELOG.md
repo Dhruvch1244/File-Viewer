@@ -5,6 +5,44 @@ workflow publishes a `win-x64` build when a `v*.*.*` tag is pushed.
 
 This file starts at 0.1.5; releases 0.0.1 through 0.1.4 predate it and have no entries here.
 
+## 0.1.8
+
+### Fixed
+
+- **Exporting "every section" of a bulk file could silently drop rows.** Whichever sections had
+  already been opened and browsed exported through that grid's *current* filtered view, while
+  sections never opened exported in full — so a filter left active while looking at one section
+  (even one long since forgotten about) meant that section came out short, with no warning, the
+  next time "every section" was exported. Every section now always exports every data record,
+  regardless of any filter active on its grid; the filtered subset of what's on screen is still
+  available via the existing "rows in view" scope.
+- **Indexing a large bulk file could throw and fail to open at all.** A line-ending probe narrowed
+  the whole file's length to a 32-bit integer before checking it was small — any bulk file over
+  roughly 2.1 GB hit an `OverflowException` and never opened, rather than just taking a while.
+- **The value-filter popup's search box and Select all/Deselect all, dropped by an earlier merge,
+  and the value checklist's missing UI virtualization** are both restored/fixed as of the previous
+  release's last commit but hadn't been written up here yet — included for the record.
+
+### Changed
+
+- **Adding, duplicating, deleting or undoing a row now shows what's happening.** These ran their
+  row-list refresh synchronously on the UI thread with no visual feedback — on a large, filtered
+  file this could freeze the window for the whole recompute with nothing telling you why. They now
+  run the same background-recompute path search and column filters already used, and the status
+  line names the actual operation ("Deleting…", "Undoing…", "Adding row…", …) instead of always
+  reading "Filtering…".
+- **Indexing a large file is significantly faster.** Profiling a 71-million-row/3.2 GB synthetic
+  file found the final step — merging the parallel-scanned chunks into the row index — running
+  single-threaded and taking roughly two-thirds of total index time. Chunk row counts are known
+  ahead of the merge (a cheap prefix sum), so that merge is now split across chunks and run in
+  parallel the same way the scan itself already is: ~9s down to ~1.3s on a 4-core machine for that
+  file.
+- **`RowResolver.Resolve` no longer copies a row's decoded fields unless it actually has an edit to
+  apply** — the shared row-resolution path behind grid rendering, export, and the filter/sort
+  engine's decode path, called on the order of millions of times for a large file. Lazy
+  copy-on-write instead of an unconditional array copy measured ~5% faster and ~14% less GC
+  pressure on that path.
+
 ## 0.1.7
 
 ### Fixed
